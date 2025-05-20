@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Direct Google Speech API Test</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .card {
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    button {
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    pre {
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      max-height: 300px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Direct Google Speech API Test</h1>
+  
+  <div class="card">
+    <h2>API Key</h2>
+    <input type="password" id="api-key" placeholder="Enter your Google Cloud API Key" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+    <button id="save-key">Save Key</button>
+  </div>
+  
+  <div class="card">
+    <h2>Test 1: Minimal V1 Request</h2>
+    <p>This test sends a minimal valid request to the V1 API with a tiny audio sample.</p>
+    <button id="test-v1">Run Test</button>
+    <div id="v1-status">Ready</div>
+    <pre id="v1-result">Results will appear here</pre>
+  </div>
+  
+  <div class="card">
+    <h2>Test 2: Record and Send</h2>
+    <p>Record audio and send it to the V1 API with the exact format from the working example.</p>
+    <button id="record-button">Start Recording</button>
+    <div id="record-status">Ready</div>
+    <pre id="record-result">Results will appear here</pre>
+  </div>
+  
+  <script>
+    // DOM Elements
+    const apiKeyInput = document.getElementById('api-key');
+    const saveKeyButton = document.getElementById('save-key');
+    const testV1Button = document.getElementById('test-v1');
+    const v1Status = document.getElementById('v1-status');
+    const v1Result = document.getElementById('v1-result');
+    const recordButton = document.getElementById('record-button');
+    const recordStatus = document.getElementById('record-status');
+    const recordResult = document.getElementById('record-result');
+    
+    // Variables
+    let apiKey = '';
+    let isRecording = false;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+      // Load API key from localStorage if available
+      const savedApiKey = localStorage.getItem('googleSpeechApiKey');
+      if (savedApiKey) {
+        apiKeyInput.value = savedApiKey;
+        apiKey = savedApiKey;
+      }
+      
+      // Save API key
+      saveKeyButton.addEventListener('click', function() {
+        apiKey = apiKeyInput.value.trim();
+        if (apiKey) {
+          localStorage.setItem('googleSpeechApiKey', apiKey);
+          alert('API key saved');
+        }
+      });
+      
+      // Test V1 API
+      testV1Button.addEventListener('click', testV1Api);
+      
+      // Record button
+      recordButton.addEventListener('click', toggleRecording);
+    });
+    
+    // Test V1 API with minimal request
+    async function testV1Api() {
+      if (!apiKey) {
+        v1Status.textContent = 'Error: API key is required';
+        return;
+      }
+      
+      v1Status.textContent = 'Testing...';
+      
+      try {
+        // Tiny valid base64 audio (1-second silence)
+        const tinyAudio = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+        
+        // Create minimal valid request for V1 API
+        const request = {
+          config: {
+            languageCode: 'en-US',
+            model: 'default',
+            enableAutomaticPunctuation: true
+          },
+          audio: {
+            content: tinyAudio
+          }
+        };
+        
+        // Log the request
+        console.log('Request URL:', `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`);
+        console.log('Request Body:', JSON.stringify(request, null, 2));
+        
+        // Send the request directly to Google's API
+        const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(request)
+        });
+        
+        // Log response status and headers
+        console.log('Response Status:', response.status);
+        console.log('Response Headers:', response.headers);
+        
+        // Get response data
+        let responseData;
+        const contentType = response.headers.get('content-type');
+        
+        if (contentType && contentType.includes('application/json')) {
+          responseData = await response.json();
+        } else {
+          responseData = await response.text();
+        }
+        
+        // Display results
+        v1Status.textContent = `Status: ${response.status}`;
+        v1Result.textContent = typeof responseData === 'string' 
+          ? responseData 
+          : JSON.stringify(responseData, null, 2);
+          
+      } catch (error) {
+        v1Status.textContent = `Error: ${error.message}`;
+        v1Result.textContent = error.stack;
+        console.error('Test error:', error);
+      }
+    }
+    
+    // Toggle recording
+    async function toggleRecording() {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        await startRecording();
+      }
+    }
+    
+    // Start recording
+    async function startRecording() {
+      if (!apiKey) {
+        recordStatus.textContent = 'Error: API key is required';
+        return;
+      }
+      
+      try {
+        // Reset audio chunks
+        audioChunks = [];
+        
+        // Request microphone access
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Create media recorder
+        mediaRecorder = new MediaRecorder(stream);
+        
+        // Collect audio chunks
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
+        
+        // When recording stops
+        mediaRecorder.onstop = processRecording;
+        
+        // Start recording
+        mediaRecorder.start();
+        isRecording = true;
+        recordButton.textContent = 'Stop Recording';
+        recordStatus.textContent = 'Recording...';
+        
+      } catch (error) {
+        recordStatus.textContent = `Microphone error: ${error.message}`;
+        console.error('Recording error:', error);
+      }
+    }
+    
+    // Stop recording
+    function stopRecording() {
+      if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        isRecording = false;
+        recordButton.textContent = 'Start Recording';
+        recordStatus.textContent = 'Processing...';
+      }
+    }
+    
+    // Process recording
+    async function processRecording() {
+      try {
+        // Create audio blob
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        
+        // Convert to base64
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        
+        reader.onloadend = async function() {
+          // Get base64 data
+          const base64Audio = reader.result.split(',')[1];
+          
+          // Create request exactly like the working example
+          const request = {
+            config: {
+              languageCode: 'en-US',
+              model: 'default',
+              enableAutomaticPunctuation: true
+            },
+            audio: {
+              content: base64Audio
+            }
+          };
+          
+          recordStatus.textContent = 'Sending to Google...';
+          
+          try {
+            // Send request directly to Google's API
+            const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(request)
+            });
+            
+            // Log response status and headers
+            console.log('Response Status:', response.status);
+            console.log('Response Headers:', response.headers);
+            
+            // Get response data
+            let responseData;
+            const contentType = response.headers.get('content-type');
+            
+            if (contentType && contentType.includes('application/json')) {
+              responseData = await response.json();
+            } else {
+              responseData = await response.text();
+            }
+            
+            // Display results
+            recordStatus.textContent = `Status: ${response.status}`;
+            recordResult.textContent = typeof responseData === 'string' 
+              ? responseData 
+              : JSON.stringify(responseData, null, 2);
+              
+          } catch (error) {
+            recordStatus.textContent = `API error: ${error.message}`;
+            recordResult.textContent = error.stack;
+            console.error('API error:', error);
+          }
+        };
+        
+      } catch (error) {
+        recordStatus.textContent = `Processing error: ${error.message}`;
+        recordResult.textContent = error.stack;
+        console.error('Processing error:', error);
+      }
+    }
+  </script>
+</body>
+</html>

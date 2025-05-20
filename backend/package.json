@@ -1,0 +1,17 @@
+{
+  "name": "speech-api-proxy",
+  "version": "1.0.0",
+  "description": "Proxy server for Google Speech-to-Text API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "google-auth-library": "^9.15.1",
+    "https-proxy-agent": "^7.0.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}
