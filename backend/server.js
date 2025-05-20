@@ -63,46 +63,49 @@ app.post('/api/speech/:version', async (req, res) => {
     }
     
     console.log(`Proxying request to ${apiUrl} through ${proxyUrl}`);
-    console.log('Request body structure:', JSON.stringify({
-      ...req.body,
-      audio: req.body.audio ? { content: '[BASE64_AUDIO_CONTENT]' } : undefined,
-      content: req.body.content ? '[BASE64_AUDIO_CONTENT]' : undefined
-    }, null, 2));
     
     // Log npm environment information
     console.log('npm_lifecycle_event:', process.env.npm_lifecycle_event);
     console.log('Using global proxy agent');
     
-    // Check if service account is provided in the request body
+    // Make a clean copy of the request body without any auth-related fields
     let requestData = { ...req.body };
+    
+    // Extract service account if provided
     const serviceAccount = requestData.serviceAccount;
+    
+    // Default headers
     let headers = {
       'Content-Type': 'application/json'
     };
     
-    // If service account is provided, use it for authentication
+    // Determine authentication method
     if (serviceAccount && version === 'v2') {
+      console.log('Service account provided, using for authentication');
+      
       try {
-        // Remove serviceAccount from the request body
+        // Step 1: Remove service account from the request body
         delete requestData.serviceAccount;
-        console.log('Service account provided, using for authentication');
         
-        // Create auth client from service account
+        // Step 2: Create auth client and get token
         const auth = new GoogleAuth({
           credentials: serviceAccount,
           scopes: ['https://www.googleapis.com/auth/cloud-platform']
         });
         
-        // Get access token
         const client = await auth.getClient();
         const token = await client.getAccessToken();
         
-        // Use token in request headers
+        // Step 3: Set Authorization header with Bearer token
         headers['Authorization'] = `Bearer ${token.token}`;
+        console.log('Using Bearer token for authentication:', token.token.substring(0, 10) + '...');
         
-        // Remove API key from URL if using service account auth
-        apiUrl = apiUrl.replace(`?key=${apiKey}`, '');
-        console.log(`Using service account auth, updated URL: ${apiUrl}`);
+        // Step 4: When using service account auth, remove API key from URL
+        if (apiUrl.includes('?')) {
+          apiUrl = apiUrl.split('?')[0];
+        }
+        
+        console.log('Using service account auth with URL:', apiUrl);
       } catch (authError) {
         console.error('Error getting access token:', authError);
         console.log('Falling back to API key authentication');
@@ -111,13 +114,51 @@ app.post('/api/speech/:version', async (req, res) => {
       console.log('Using API key authentication');
     }
     
+    // Step 5: Create a clean request body with correct structure for V2
+    if (version === 'v2') {
+      // Extract necessary fields
+      const projectId = req.query.project || requestData.projectId || 'speech-to-text-proxy';
+      const region = req.query.region || requestData.region || 'us-central1';
+      const languageCodes = Array.isArray(requestData.config?.language_codes) 
+        ? requestData.config.language_codes 
+        : [requestData.languageCode || 'en-US'];
+      const model = requestData.config?.model || requestData.model || 'chirp';
+      const content = requestData.content;
+      
+      // Create clean request body
+      requestData = {
+        config: {
+          language_codes: languageCodes,
+          model: model,
+          features: {
+            enable_automatic_punctuation: true
+          },
+          auto_decoding_config: {}
+        },
+        content: content
+      };
+      
+      // Add recognizer only if needed
+      if (!apiUrl.includes('recognizers/_:recognize')) {
+        requestData.recognizer = `projects/${projectId}/locations/${region}/recognizers/_`;
+      }
+    }
+    
+    // Log final request details
+    console.log('Request URL:', apiUrl);
+    console.log('Request headers:', JSON.stringify(headers, null, 2));
+    console.log('Request body structure:', JSON.stringify({
+      ...requestData,
+      content: '[BASE64_AUDIO_CONTENT]'
+    }, null, 2));
+    
     // Forward the request to Google's API
     const response = await axios({
       method: 'post',
       url: apiUrl,
       data: requestData,
       headers: headers,
-      httpsAgent: proxyAgent, // Using the global proxy agent
+      httpsAgent: proxyAgent,
       validateStatus: false, // Don't throw on error status codes
       timeout: 30000, // 30 second timeout
       proxy: false // Disable axios's built-in proxy handling
@@ -184,6 +225,54 @@ app.post('/api/speech/:version/upload', upload.single('audio'), async (req, res)
     const audioFile = fs.readFileSync(req.file.path);
     const audioBase64 = audioFile.toString('base64');
     
+    // Default headers
+    let headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    // Extract service account if provided
+    let serviceAccount = null;
+    if (req.body.serviceAccount) {
+      try {
+        serviceAccount = JSON.parse(req.body.serviceAccount);
+        console.log('Service account JSON parsed from request');
+      } catch (e) {
+        console.error('Error parsing service account JSON:', e);
+      }
+    }
+    
+    // Determine authentication method
+    if (serviceAccount && version === 'v2') {
+      console.log('Service account provided for file upload, using for authentication');
+      
+      try {
+        // Create auth client and get token
+        const auth = new GoogleAuth({
+          credentials: serviceAccount,
+          scopes: ['https://www.googleapis.com/auth/cloud-platform']
+        });
+        
+        const client = await auth.getClient();
+        const token = await client.getAccessToken();
+        
+        // Set Authorization header with Bearer token
+        headers['Authorization'] = `Bearer ${token.token}`;
+        console.log('Using Bearer token for file upload authentication:', token.token.substring(0, 10) + '...');
+        
+        // When using service account auth, remove API key from URL
+        if (apiUrl.includes('?')) {
+          apiUrl = apiUrl.split('?')[0];
+        }
+        
+        console.log('Using service account auth for file upload with URL:', apiUrl);
+      } catch (authError) {
+        console.error('Error getting access token for file upload:', authError);
+        console.log('Falling back to API key authentication for file upload');
+      }
+    } else {
+      console.log('Using API key authentication for file upload');
+    }
+    
     // Create request body based on API version
     let requestBody;
     if (version === 'v1') {
@@ -192,86 +281,65 @@ app.post('/api/speech/:version/upload', upload.single('audio'), async (req, res)
           languageCode: req.body.languageCode || 'en-US',
           model: req.body.model || 'default',
           enableAutomaticPunctuation: true
-          // Do not specify encoding or sampleRateHertz
-          // Let Google auto-detect the audio format
         },
         audio: {
           content: audioBase64
         }
       };
     } else if (version === 'v2') {
-      // For V2, update the recognizer field to use the same project ID and region
+      // Parse request data if provided
+      let v2Config = null;
+      if (req.body.requestData) {
+        try {
+          const parsedData = JSON.parse(req.body.requestData);
+          v2Config = parsedData.config;
+        } catch (e) {
+          console.error('Error parsing requestData:', e);
+        }
+      }
+      
+      // Extract necessary fields
       const projectId = req.query.project || req.body.projectId || 'speech-to-text-proxy';
       const region = req.query.region || req.body.region || 'us-central1';
       
-      // Check if the client sent a pre-formatted request structure
-      if (req.body.requestData) {
-        try {
-          // Parse the request data JSON string
-          const parsedRequestData = JSON.parse(req.body.requestData);
-          requestBody = parsedRequestData;
-          
-          // Add the audio content to the request
-          requestBody.content = audioBase64;
-          
-          console.log('Using pre-formatted request data from client');
-        } catch (parseError) {
-          console.error('Error parsing requestData:', parseError);
-          // Fall back to constructing the request manually
-        }
+      // Get language codes
+      let languageCodes = ['en-US'];
+      if (v2Config && Array.isArray(v2Config.language_codes)) {
+        languageCodes = v2Config.language_codes;
+      } else if (req.body['languageCodes[]'] && Array.isArray(req.body['languageCodes[]'])) {
+        languageCodes = req.body['languageCodes[]'];
+      } else if (req.body.languageCode) {
+        languageCodes = [req.body.languageCode];
       }
       
-      // If we don't have a valid request body yet, construct it
-      if (!requestBody) {
-        // Check if multiple languages were provided
-        let languageCodes = [];
-        
-        // Handle form data with array notation (from file upload)
-        if (req.body['languageCodes[]'] && Array.isArray(req.body['languageCodes[]'])) {
-          languageCodes = req.body['languageCodes[]'];
-        }
-        // Handle direct array (from JSON request)
-        else if (req.body.languageCodes && Array.isArray(req.body.languageCodes)) {
-          languageCodes = req.body.languageCodes;
-        }
-        // Handle config.language_codes from the properly formatted request
-        else if (req.body.config && req.body.config.language_codes && Array.isArray(req.body.config.language_codes)) {
-          languageCodes = req.body.config.language_codes;
-        }
-        // Handle single language code
-        else if (req.body.languageCode) {
-          languageCodes = [req.body.languageCode];
-        }
-        // Default
-        else {
-          languageCodes = ['en-US'];
-        }
-        
-        // If the request is already in the correct format, use it directly
-        if (req.body.recognizer && req.body.config && req.body.content) {
-          requestBody = req.body;
-          // Still ensure the language_codes are set correctly
-          requestBody.config.language_codes = languageCodes;
-        } else {
-          // Otherwise construct the proper format
-          requestBody = {
-            recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
-            config: {
-              language_codes: languageCodes,
-              model: req.body.model || 'chirp',
-              auto_decoding_config: {}
-            },
-            content: audioBase64
-          };
-        }
+      // Get model
+      const model = v2Config?.model || req.body.model || 'chirp';
+      
+      // Create clean request body
+      requestBody = {
+        config: {
+          language_codes: languageCodes,
+          model: model,
+          features: {
+            enable_automatic_punctuation: true
+          },
+          auto_decoding_config: {}
+        },
+        content: audioBase64
+      };
+      
+      // Add recognizer only if needed
+      if (apiUrl.includes('recognizers/_:recognize')) {
+        requestBody.recognizer = `projects/${projectId}/locations/${region}/recognizers/_`;
       }
     }
     
-    console.log(`Proxying file upload to ${apiUrl} through ${proxyUrl}`);
-    console.log('Request body structure:', JSON.stringify({
+    // Log final request details
+    console.log('File upload request URL:', apiUrl);
+    console.log('File upload request headers:', JSON.stringify(headers, null, 2));
+    console.log('File upload request body structure:', JSON.stringify({
       ...requestBody,
-      audio: requestBody.audio ? { content: '[BASE64_AUDIO_CONTENT]' } : undefined,
-      content: requestBody.content ? '[BASE64_AUDIO_CONTENT]' : undefined
+      content: '[BASE64_AUDIO_CONTENT]'
     }, null, 2));
     
     // Forward the request to Google's API
@@ -279,9 +347,7 @@ app.post('/api/speech/:version/upload', upload.single('audio'), async (req, res)
       method: 'post',
       url: apiUrl,
       data: requestBody,
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       httpsAgent: proxyAgent,
       validateStatus: false, // Don't throw on error status codes
       timeout: 30000, // 30 second timeout

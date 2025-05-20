@@ -73,84 +73,110 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set up event listeners
   recordButton.addEventListener('click', toggleRecording);
   uploadButton.addEventListener('click', handleFileUpload);
-  debugModeCheckbox.addEventListener('change', toggleDebugMode);
+  debugModeCheckbox.addEventListener('checked', toggleDebugMode);
   
-  // Handle service account file upload
-  v2ServiceAccount.addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          serviceAccountData = JSON.parse(e.target.result);
-          logDebug('Service account loaded', { 
-            type: serviceAccountData.type,
-            project_id: serviceAccountData.project_id 
-          });
-          // If the service account has a project_id, use it
-          if (serviceAccountData.project_id && !v2ProjectId.value) {
-            v2ProjectId.value = serviceAccountData.project_id;
-            localStorage.setItem('v2ProjectId', serviceAccountData.project_id);
-          }
-        } catch (error) {
-          console.error('Error parsing service account JSON:', error);
-          logDebug('Error parsing service account JSON', error);
-          serviceAccountData = null;
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      serviceAccountData = null;
-    }
-  });
-  
-  // Tab switching
+  // API version tab switching
   v1Tab.addEventListener('click', () => setApiVersion('v1'));
   v2Tab.addEventListener('click', () => setApiVersion('v2'));
   
-  // Save API keys when changed
-  v1ApiKey.addEventListener('change', () => {
-    localStorage.setItem('v1ApiKey', v1ApiKey.value);
-  });
+  // Service account file upload
+  v2ServiceAccount.addEventListener('change', handleServiceAccountUpload);
   
-  v2ApiKey.addEventListener('change', () => {
-    localStorage.setItem('v2ApiKey', v2ApiKey.value);
-  });
+  // Initialize debug mode from localStorage
+  const debugMode = localStorage.getItem('debugMode') === 'true';
+  debugModeCheckbox.checked = debugMode;
+  toggleDebugMode();
+  
+  // Check if browser supports getUserMedia
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    statusElement.textContent = 'Your browser does not support audio recording';
+    statusElement.className = 'alert alert-danger';
+    recordButton.disabled = true;
+  }
 });
 
-// Set the active API version
+// Handle service account file upload
+function handleServiceAccountUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const jsonData = JSON.parse(e.target.result);
+      serviceAccountData = jsonData;
+      
+      // Extract project ID from service account if available
+      if (jsonData.project_id && !v2ProjectId.value) {
+        v2ProjectId.value = jsonData.project_id;
+        localStorage.setItem('v2ProjectId', jsonData.project_id);
+      }
+      
+      statusElement.textContent = 'Service account loaded successfully';
+      statusElement.className = 'alert alert-success';
+      logDebug('Service account loaded', { 
+        project_id: jsonData.project_id,
+        client_email: jsonData.client_email
+      });
+    } catch (error) {
+      console.error('Error parsing service account JSON:', error);
+      statusElement.textContent = 'Error loading service account: Invalid JSON';
+      statusElement.className = 'alert alert-danger';
+      serviceAccountData = null;
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Set API version
 function setApiVersion(version) {
   currentApiVersion = version;
+  
+  // Update UI
+  if (version === 'v1') {
+    v1Tab.classList.add('active');
+    v1Tab.setAttribute('aria-selected', 'true');
+    v2Tab.classList.remove('active');
+    v2Tab.setAttribute('aria-selected', 'false');
+    
+    document.getElementById('v1-content').classList.add('show', 'active');
+    document.getElementById('v2-content').classList.remove('show', 'active');
+  } else {
+    v2Tab.classList.add('active');
+    v2Tab.setAttribute('aria-selected', 'true');
+    v1Tab.classList.remove('active');
+    v1Tab.setAttribute('aria-selected', 'false');
+    
+    document.getElementById('v2-content').classList.add('show', 'active');
+    document.getElementById('v1-content').classList.remove('show', 'active');
+  }
 }
 
 // Toggle debug mode
 function toggleDebugMode() {
-  if (debugModeCheckbox.checked) {
-    debugCard.style.display = 'block';
-  } else {
-    debugCard.style.display = 'none';
-  }
+  const isDebugMode = debugModeCheckbox.checked;
+  debugCard.style.display = isDebugMode ? 'block' : 'none';
+  localStorage.setItem('debugMode', isDebugMode);
 }
 
 // Log debug information
-function logDebug(message, data = null) {
+function logDebug(message, data = {}) {
   if (!debugModeCheckbox.checked) return;
   
   const timestamp = new Date().toISOString();
-  let logMessage = `[${timestamp}] ${message}`;
+  const logEntry = {
+    timestamp,
+    message,
+    ...data
+  };
   
-  if (data) {
-    if (typeof data === 'object') {
-      logMessage += '\n' + JSON.stringify(data, null, 2);
-    } else {
-      logMessage += '\n' + data;
-    }
-  }
+  console.log(`[DEBUG] ${message}`, data);
   
-  debugOutput.textContent = logMessage + '\n\n' + debugOutput.textContent;
+  const logText = JSON.stringify(logEntry, null, 2);
+  debugOutput.textContent = logText + '\n\n' + debugOutput.textContent;
 }
 
-// Toggle recording state
+// Toggle recording
 async function toggleRecording() {
   if (isRecording) {
     stopRecording();
@@ -159,19 +185,17 @@ async function toggleRecording() {
   }
 }
 
-// Start recording audio
+// Start recording
 async function startRecording() {
   try {
-    // Reset state
-    audioChunks = [];
-    transcriptElement.textContent = 'Listening...';
-    confidenceElement.textContent = '';
+    statusElement.textContent = 'Requesting microphone access...';
+    statusElement.className = 'alert alert-info';
     
-    // Get microphone access
+    // Request microphone access
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     microphoneStream = stream;
     
-    // Set up audio context for visualization
+    // Set up audio context for visualizing audio levels
     if (!audioContext) {
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
       analyser = audioContext.createAnalyser();
@@ -181,20 +205,52 @@ async function startRecording() {
     const source = audioContext.createMediaStreamSource(stream);
     source.connect(analyser);
     
-    // Start visualization
+    // Start visualizing audio levels
     visualizeAudio();
     
-    // Set up media recorder
+    // Create MediaRecorder
     mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
     
+    // Collect audio chunks
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
         audioChunks.push(event.data);
       }
     };
     
-    mediaRecorder.onstop = () => {
-      processAudio();
+    // Handle recording stop
+    mediaRecorder.onstop = async () => {
+      // Stop visualizing audio
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+      
+      // Stop microphone stream
+      if (microphoneStream) {
+        microphoneStream.getTracks().forEach(track => track.stop());
+        microphoneStream = null;
+      }
+      
+      statusElement.textContent = 'Processing audio...';
+      
+      try {
+        // Create audio blob and convert to base64
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        
+        reader.onload = async (e) => {
+          const base64Audio = e.target.result.split(',')[1];
+          await sendAudioToApi(base64Audio);
+        };
+        
+        reader.readAsDataURL(audioBlob);
+      } catch (error) {
+        console.error('Error processing audio:', error);
+        statusElement.textContent = `Error: ${error.message}`;
+        statusElement.className = 'alert alert-danger';
+      }
     };
     
     // Start recording
@@ -202,19 +258,19 @@ async function startRecording() {
     isRecording = true;
     recordButton.textContent = 'Stop Recording';
     recordButton.classList.add('recording');
-    statusElement.textContent = 'Recording...';
-    statusElement.className = 'alert alert-danger';
+    statusElement.textContent = 'Recording... (click Stop when done)';
     
     logDebug('Recording started');
+    
   } catch (error) {
     console.error('Error starting recording:', error);
     statusElement.textContent = `Error: ${error.message}`;
     statusElement.className = 'alert alert-danger';
-    logDebug('Recording error', error);
+    logDebug('Recording error', { error: error.message });
   }
 }
 
-// Stop recording audio
+// Stop recording
 function stopRecording() {
   if (mediaRecorder && isRecording) {
     mediaRecorder.stop();
@@ -224,64 +280,43 @@ function stopRecording() {
     statusElement.textContent = 'Processing audio...';
     statusElement.className = 'alert alert-info';
     
-    // Stop visualization
-    if (animationFrameId) {
-      cancelAnimationFrame(animationFrameId);
-      animationFrameId = null;
-    }
-    
-    // Stop microphone stream
-    if (microphoneStream) {
-      microphoneStream.getTracks().forEach(track => track.stop());
-      microphoneStream = null;
-    }
-    
     logDebug('Recording stopped');
   }
 }
 
-// Process recorded audio
-async function processAudio() {
-  try {
-    statusElement.textContent = 'Converting audio...';
+// Visualize audio levels
+function visualizeAudio() {
+  if (!analyser) return;
+  
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  
+  function draw() {
+    if (!analyser) return;
     
-    // Create audio blob
-    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-    logDebug('Audio blob created', { size: audioBlob.size + ' bytes', type: audioBlob.type });
+    animationFrameId = requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(dataArray);
     
-    // Convert to base64
-    const base64Audio = await blobToBase64(audioBlob);
-    logDebug('Audio converted to base64', { length: base64Audio.length + ' characters' });
+    // Calculate average level
+    let sum = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      sum += dataArray[i];
+    }
+    const average = sum / bufferLength;
     
-    // Send to API
-    await sendAudioToApi(base64Audio);
-  } catch (error) {
-    console.error('Error processing audio:', error);
-    statusElement.textContent = `Error: ${error.message}`;
-    statusElement.className = 'alert alert-danger';
-    logDebug('Processing error', error);
+    // Update audio level visualization
+    const levelPercentage = Math.min(100, average * 2); // Scale for better visibility
+    audioLevelFill.style.width = `${levelPercentage}%`;
   }
-}
-
-// Convert blob to base64
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      // Extract the base64 data from the result
-      const base64Data = reader.result.split(',')[1];
-      resolve(base64Data);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+  
+  draw();
 }
 
 // Handle file upload
 async function handleFileUpload() {
   const fileInput = currentApiVersion === 'v1' ? v1FileUpload : v2FileUpload;
   
-  if (!fileInput.files || fileInput.files.length === 0) {
+  if (!fileInput.files.length) {
     statusElement.textContent = 'Please select an audio file first';
     statusElement.className = 'alert alert-warning';
     return;
@@ -312,20 +347,36 @@ async function handleFileUpload() {
       const region = v2Region.value;
       const selectedLanguages = getSelectedLanguages();
       
-      // Create the proper V2 request structure
+      // Create the proper V2 request structure with all selected languages
       const v2RequestData = {
         recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
         config: {
+          // Include all selected languages for Chirp 2
           language_codes: selectedLanguages,
           model: getModel(),
+          features: {
+            enable_automatic_punctuation: true
+          },
           auto_decoding_config: {}
         }
         // content will be added by the server from the file
       };
       
-      // If service account file is provided, include it in the request
+      // Log the languages being used
+      if (selectedLanguages.length > 1 && (getModel() === 'chirp' || getModel() === 'chirp_2')) {
+        logDebug('Using multiple languages with Chirp for file upload', { 
+          languages: selectedLanguages 
+        });
+      }
+      
+      // Service account authentication is handled by the backend via HTTP headers
+      // We'll pass the service account separately
       if (serviceAccountData) {
-        v2RequestData.serviceAccount = serviceAccountData;
+        // Add a flag to indicate we're using service account auth
+        formData.append('useServiceAccount', 'true');
+        // Pass the service account data for authentication
+        formData.append('serviceAccount', JSON.stringify(serviceAccountData));
+        // The backend will handle authentication properly
         logDebug('Using service account authentication for file upload', { projectId });
       }
       
@@ -340,8 +391,25 @@ async function handleFileUpload() {
       throw new Error('API key is required');
     }
     
-    // Send to server
-    const response = await fetch(`/api/speech/${currentApiVersion}/upload?key=${apiKey}`, {
+    // Save API key to localStorage
+    if (currentApiVersion === 'v1') {
+      localStorage.setItem('v1ApiKey', apiKey);
+    } else {
+      localStorage.setItem('v2ApiKey', apiKey);
+    }
+    
+    // Create URL with API key
+    let uploadUrl = `/api/speech/${currentApiVersion}/upload?key=${encodeURIComponent(apiKey)}`;
+    
+    // Add project ID and region for V2 API
+    if (currentApiVersion === 'v2') {
+      uploadUrl += `&project=${encodeURIComponent(v2ProjectId.value)}&region=${encodeURIComponent(v2Region.value)}`;
+    }
+    
+    logDebug('Uploading file', { url: uploadUrl });
+    
+    // Send request
+    const response = await fetch(uploadUrl, {
       method: 'POST',
       body: formData
     });
@@ -352,7 +420,7 @@ async function handleFileUpload() {
     }
     
     const data = await response.json();
-    logDebug('API response', data);
+    logDebug('File upload response', data);
     
     // Process results
     processResults(data);
@@ -393,23 +461,34 @@ async function sendAudioToApi(base64Audio) {
       const projectId = v2ProjectId.value;
       const region = v2Region.value;
       
+      // For Chirp model with multiple languages, we can specify all expected languages
+      const languages = getSelectedLanguages();
+      
       requestBody = {
         recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
         config: {
-          language_codes: getSelectedLanguages(),
+          // Include all selected languages for Chirp 2
+          language_codes: languages,
           model: getModel(),
+          features: {
+            enable_automatic_punctuation: true
+          },
           auto_decoding_config: {}
         },
         content: base64Audio
       };
       
-      // If service account file is provided, include it in the request
-      if (serviceAccountData) {
-        requestBody.serviceAccount = serviceAccountData;
-        logDebug('Using service account authentication', { projectId });
+      // Log the languages being used
+      if (languages.length > 1 && (getModel() === 'chirp' || getModel() === 'chirp_2')) {
+        logDebug('Using multiple languages with Chirp', { languages });
       }
-      
-      // Save project ID and region to localStorage
+    }
+    
+    // Save API key to localStorage
+    if (currentApiVersion === 'v1') {
+      localStorage.setItem('v1ApiKey', apiKey);
+    } else {
+      localStorage.setItem('v2ApiKey', apiKey);
       localStorage.setItem('v2ProjectId', v2ProjectId.value);
       localStorage.setItem('v2Region', v2Region.value);
       
@@ -420,7 +499,6 @@ async function sendAudioToApi(base64Audio) {
     
     logDebug('Sending request to API', { 
       version: currentApiVersion,
-      url: `/api/speech/${currentApiVersion}?key=${apiKey}`,
       requestBody: {
         ...requestBody,
         audio: requestBody.audio ? { content: '(base64 audio data)' } : undefined,
@@ -429,7 +507,7 @@ async function sendAudioToApi(base64Audio) {
     });
     
     // Send request to our proxy server
-    let apiUrl = `/api/speech/${currentApiVersion}?key=${apiKey}`;
+    let apiUrl = `/api/speech/${currentApiVersion}?key=${encodeURIComponent(apiKey)}`;
     
     // Add project ID and region to URL for V2 API
     if (currentApiVersion === 'v2') {
@@ -438,105 +516,90 @@ async function sendAudioToApi(base64Audio) {
       apiUrl += `&project=${projectId}&region=${region}`;
     }
     
+    // Create headers
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    // Pass service account to backend for authentication
+    if (serviceAccountData && currentApiVersion === 'v2') {
+      // We need to pass the service account data for authentication
+      requestBody.serviceAccount = serviceAccountData;
+      logDebug('Passing service account to backend for authentication');
+    }
+    
     const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       body: JSON.stringify(requestBody)
     });
     
-    const data = await response.json();
-    
-    // Check if there's an error in the response
-    if (data.error) {
-      throw new Error(data.error.message || `API error: ${data.error.code || 'unknown'}`);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || `Server error: ${response.status}`);
     }
     
+    const data = await response.json();
     logDebug('API response', data);
     
     // Process results
     processResults(data);
     
-    statusElement.textContent = 'Speech recognition completed';
+    statusElement.textContent = 'Audio processed successfully';
     statusElement.className = 'alert alert-success';
+    
   } catch (error) {
-    console.error('API error:', error);
+    console.error('Error sending audio to API:', error);
     statusElement.textContent = `Error: ${error.message}`;
     statusElement.className = 'alert alert-danger';
-    logDebug('API error', error);
+    logDebug('API error', { error: error.message });
   }
 }
 
 // Process API results
 function processResults(data) {
   if (currentApiVersion === 'v1') {
-    processV1Results(data);
-  } else {
-    processV2Results(data);
-  }
-}
-
-// Process V1 API results
-function processV1Results(data) {
-  if (!data.results || data.results.length === 0) {
-    transcriptElement.textContent = 'No speech detected';
-    confidenceElement.textContent = '';
-    return;
-  }
-  
-  let transcript = '';
-  let confidence = 0;
-  let resultCount = 0;
-  
-  data.results.forEach(result => {
-    if (result.alternatives && result.alternatives.length > 0) {
-      transcript += result.alternatives[0].transcript + ' ';
-      confidence += result.alternatives[0].confidence || 0;
-      resultCount++;
-    }
-  });
-  
-  if (resultCount > 0) {
-    const avgConfidence = confidence / resultCount;
-    transcriptElement.textContent = transcript.trim();
-    confidenceElement.textContent = `Confidence: ${(avgConfidence * 100).toFixed(2)}%`;
-  } else {
-    transcriptElement.textContent = 'No speech detected';
-    confidenceElement.textContent = '';
-  }
-}
-
-// Process V2 API results
-function processV2Results(data) {
-  if (!data.results || data.results.length === 0) {
-    transcriptElement.textContent = 'No speech detected';
-    confidenceElement.textContent = '';
-    return;
-  }
-  
-  let transcript = '';
-  let confidence = 0;
-  let resultCount = 0;
-  
-  data.results.forEach(result => {
-    if (result.alternatives && result.alternatives.length > 0) {
-      transcript += result.alternatives[0].transcript + ' ';
-      // V2 API might have different confidence structure
-      if (result.alternatives[0].confidence) {
-        confidence += result.alternatives[0].confidence;
-        resultCount++;
+    // Process V1 API response
+    if (data.results && data.results.length > 0) {
+      const result = data.results[0];
+      if (result.alternatives && result.alternatives.length > 0) {
+        const transcript = result.alternatives[0].transcript;
+        const confidence = result.alternatives[0].confidence;
+        
+        transcriptElement.textContent = transcript;
+        confidenceElement.textContent = `Confidence: ${(confidence * 100).toFixed(2)}%`;
+      } else {
+        transcriptElement.textContent = 'No transcription available';
+        confidenceElement.textContent = '';
       }
+    } else {
+      transcriptElement.textContent = 'No results returned';
+      confidenceElement.textContent = '';
     }
-  });
-  
-  transcriptElement.textContent = transcript.trim();
-  
-  if (resultCount > 0) {
-    const avgConfidence = confidence / resultCount;
-    confidenceElement.textContent = `Confidence: ${(avgConfidence * 100).toFixed(2)}%`;
   } else {
-    confidenceElement.textContent = '';
+    // Process V2 API response
+    if (data.results && data.results.length > 0) {
+      const transcripts = data.results.map(result => {
+        if (result.alternatives && result.alternatives.length > 0) {
+          return result.alternatives[0].transcript;
+        }
+        return '';
+      }).filter(t => t).join(' ');
+      
+      transcriptElement.textContent = transcripts || 'No transcription available';
+      
+      // Extract confidence if available
+      if (data.results[0].alternatives && data.results[0].alternatives.length > 0 && 
+          data.results[0].alternatives[0].confidence) {
+        const confidence = data.results[0].alternatives[0].confidence;
+        confidenceElement.textContent = `Confidence: ${(confidence * 100).toFixed(2)}%`;
+      } else {
+        confidenceElement.textContent = '';
+      }
+    } else {
+      transcriptElement.textContent = 'No results returned';
+      confidenceElement.textContent = '';
+    }
   }
 }
 
@@ -568,44 +631,3 @@ function getSelectedLanguages() {
 function getModel() {
   return currentApiVersion === 'v1' ? v1Model.value : v2Model.value;
 }
-
-// Visualize audio levels
-function visualizeAudio() {
-  if (!analyser) return;
-  
-  const dataArray = new Uint8Array(analyser.frequencyBinCount);
-  
-  const updateVisualization = () => {
-    analyser.getByteFrequencyData(dataArray);
-    
-    // Calculate average volume
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      sum += dataArray[i];
-    }
-    const average = sum / dataArray.length;
-    
-    // Update visualization
-    const percent = (average / 255) * 100;
-    audioLevelFill.style.width = `${percent}%`;
-    
-    // Continue animation
-    animationFrameId = requestAnimationFrame(updateVisualization);
-  };
-  
-  updateVisualization();
-}
-
-// Check server health on load
-fetch('/health')
-  .then(response => response.json())
-  .then(data => {
-    logDebug('Server health check', data);
-    statusElement.textContent = `Ready to test (Proxy: ${data.proxy})`;
-  })
-  .catch(error => {
-    console.error('Server health check failed:', error);
-    statusElement.textContent = 'Error: Backend server not available';
-    statusElement.className = 'alert alert-danger';
-    logDebug('Server health check failed', error);
-  });
