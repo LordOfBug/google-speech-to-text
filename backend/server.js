@@ -204,15 +204,67 @@ app.post('/api/speech/:version/upload', upload.single('audio'), async (req, res)
       const projectId = req.query.project || req.body.projectId || 'speech-to-text-proxy';
       const region = req.query.region || req.body.region || 'us-central1';
       
-      requestBody = {
-        recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
-        config: {
-          language_codes: [req.body.languageCode || 'en-US'],
-          model: req.body.model || 'chirp',
-          auto_decoding_config: {}
-        },
-        content: audioBase64
-      };
+      // Check if the client sent a pre-formatted request structure
+      if (req.body.requestData) {
+        try {
+          // Parse the request data JSON string
+          const parsedRequestData = JSON.parse(req.body.requestData);
+          requestBody = parsedRequestData;
+          
+          // Add the audio content to the request
+          requestBody.content = audioBase64;
+          
+          console.log('Using pre-formatted request data from client');
+        } catch (parseError) {
+          console.error('Error parsing requestData:', parseError);
+          // Fall back to constructing the request manually
+        }
+      }
+      
+      // If we don't have a valid request body yet, construct it
+      if (!requestBody) {
+        // Check if multiple languages were provided
+        let languageCodes = [];
+        
+        // Handle form data with array notation (from file upload)
+        if (req.body['languageCodes[]'] && Array.isArray(req.body['languageCodes[]'])) {
+          languageCodes = req.body['languageCodes[]'];
+        }
+        // Handle direct array (from JSON request)
+        else if (req.body.languageCodes && Array.isArray(req.body.languageCodes)) {
+          languageCodes = req.body.languageCodes;
+        }
+        // Handle config.language_codes from the properly formatted request
+        else if (req.body.config && req.body.config.language_codes && Array.isArray(req.body.config.language_codes)) {
+          languageCodes = req.body.config.language_codes;
+        }
+        // Handle single language code
+        else if (req.body.languageCode) {
+          languageCodes = [req.body.languageCode];
+        }
+        // Default
+        else {
+          languageCodes = ['en-US'];
+        }
+        
+        // If the request is already in the correct format, use it directly
+        if (req.body.recognizer && req.body.config && req.body.content) {
+          requestBody = req.body;
+          // Still ensure the language_codes are set correctly
+          requestBody.config.language_codes = languageCodes;
+        } else {
+          // Otherwise construct the proper format
+          requestBody = {
+            recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
+            config: {
+              language_codes: languageCodes,
+              model: req.body.model || 'chirp',
+              auto_decoding_config: {}
+            },
+            content: audioBase64
+          };
+        }
+      }
     }
     
     console.log(`Proxying file upload to ${apiUrl} through ${proxyUrl}`);

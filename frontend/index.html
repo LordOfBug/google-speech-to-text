@@ -110,6 +110,8 @@
                 <label for="v2-project-id" class="form-label">Project ID (Required)</label>
                 <input type="text" class="form-control" id="v2-project-id" placeholder="Enter your Google Cloud Project ID">
               </div>
+            </div>
+            <div class="row mb-3">
               <div class="col-md-6">
                 <label for="v2-region" class="form-label">Region</label>
                 <select class="form-select" id="v2-region">
@@ -121,32 +123,59 @@
                   <option value="asia-northeast1">asia-northeast1 (Tokyo)</option>
                 </select>
               </div>
-            </div>
-            <div class="row mb-3">
-              <div class="col-md-12">
-                <label for="v2-service-account" class="form-label">Service Account JSON (Optional)</label>
+              <div class="col-md-6">
+                <label for="v2-service-account" class="form-label">Service Account JSON</label>
                 <input type="file" class="form-control" id="v2-service-account" accept=".json">
-                <div class="form-text">Upload your service account JSON file for V2 API authentication.</div>
+                <div class="form-text">Upload service account for authentication (optional)</div>
               </div>
             </div>
             <div class="row mb-3">
               <div class="col-md-6">
-                <label for="v2-language" class="form-label">Language</label>
-                <select class="form-select" id="v2-language">
-                  <option value="en-US">English (US)</option>
-                  <option value="en-GB">English (UK)</option>
-                  <option value="zh-CN">Chinese (Simplified)</option>
-                  <option value="zh-TW">Chinese (Traditional)</option>
-                  <option value="fr-FR">French</option>
-                  <option value="de-DE">German</option>
-                  <option value="ja-JP">Japanese</option>
-                  <option value="ko-KR">Korean</option>
-                  <option value="es-ES">Spanish</option>
-                  <option value="ru-RU">Russian</option>
-                </select>
+                <label class="form-label">Languages (Multiple for Chirp)</label>
+                <div class="border rounded p-2" style="max-height: 150px; overflow-y: auto;">
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="en-US" id="lang-en-US" checked>
+                    <label class="form-check-label" for="lang-en-US">English (US)</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="en-GB" id="lang-en-GB">
+                    <label class="form-check-label" for="lang-en-GB">English (UK)</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="zh-CN" id="lang-zh-CN">
+                    <label class="form-check-label" for="lang-zh-CN">Chinese (Simplified)</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="zh-TW" id="lang-zh-TW">
+                    <label class="form-check-label" for="lang-zh-TW">Chinese (Traditional)</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="fr-FR" id="lang-fr-FR">
+                    <label class="form-check-label" for="lang-fr-FR">French</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="de-DE" id="lang-de-DE">
+                    <label class="form-check-label" for="lang-de-DE">German</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="ja-JP" id="lang-ja-JP">
+                    <label class="form-check-label" for="lang-ja-JP">Japanese</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="ko-KR" id="lang-ko-KR">
+                    <label class="form-check-label" for="lang-ko-KR">Korean</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="es-ES" id="lang-es-ES">
+                    <label class="form-check-label" for="lang-es-ES">Spanish</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input v2-language-checkbox" type="checkbox" value="ru-RU" id="lang-ru-RU">
+                    <label class="form-check-label" for="lang-ru-RU">Russian</label>
+                  </div>
+                </div>
+                <div class="form-text">Select multiple languages for Chirp's mixed language recognition</div>
               </div>
-            </div>
-            <div class="row mb-3">
               <div class="col-md-6">
                 <label for="v2-model" class="form-label">Model</label>
                 <select class="form-select" id="v2-model">
@@ -159,6 +188,8 @@
                   <option value="video">Video</option>
                 </select>
               </div>
+            </div>
+            <div class="row mb-3">
               <div class="col-md-6">
                 <label for="v2-file-upload" class="form-label">Upload Audio File (Optional)</label>
                 <input class="form-control" type="file" id="v2-file-upload" accept="audio/*">
@@ -174,9 +205,11 @@
               <button id="record-button" class="btn btn-danger">Start Recording</button>
               <button id="upload-button" class="btn btn-primary ms-2">Upload File</button>
             </div>
-            <div class="form-check form-switch">
+            <div class="form-check">
               <input class="form-check-input" type="checkbox" id="debug-mode">
-              <label class="form-check-label" for="debug-mode">Debug Mode</label>
+              <label class="form-check-label" for="debug-mode">
+                Debug Mode
+              </label>
             </div>
           </div>
           
@@ -184,7 +217,7 @@
             <div class="audio-level-fill" id="audio-level-fill"></div>
           </div>
           
-          <div id="status" class="alert alert-secondary">Ready to test</div>
+          <div id="status" class="alert alert-info">Ready to record or upload audio</div>
         </div>
       </div>
     </div>
@@ -194,17 +227,17 @@
         <h5 class="card-title mb-0">Transcript</h5>
       </div>
       <div class="card-body">
-        <div id="transcript" class="p-3 bg-light rounded">No results yet</div>
-        <div id="confidence" class="mt-2 text-muted"></div>
+        <div id="transcript" class="mb-3"></div>
+        <div id="confidence" class="text-muted small"></div>
       </div>
     </div>
     
-    <div class="card" id="debug-card" style="display: none;">
+    <div class="card mb-4" id="debug-card" style="display: none;">
       <div class="card-header">
         <h5 class="card-title mb-0">Debug Information</h5>
       </div>
       <div class="card-body">
-        <pre id="debug-output" class="p-3 bg-light rounded">Debug information will appear here</pre>
+        <pre id="debug-output" class="bg-light p-3 rounded"></pre>
       </div>
     </div>
   </div>

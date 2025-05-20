@@ -23,7 +23,7 @@ const v2ApiKey = document.getElementById('v2-api-key');
 const v2ProjectId = document.getElementById('v2-project-id');
 const v2Region = document.getElementById('v2-region');
 const v2ServiceAccount = document.getElementById('v2-service-account');
-const v2Language = document.getElementById('v2-language');
+const v2LanguageCheckboxes = document.querySelectorAll('.v2-language-checkbox');
 const v2Model = document.getElementById('v2-model');
 const v2FileUpload = document.getElementById('v2-file-upload');
 
@@ -52,6 +52,23 @@ document.addEventListener('DOMContentLoaded', () => {
   if (savedV2Key) v2ApiKey.value = savedV2Key;
   if (savedV2ProjectId) v2ProjectId.value = savedV2ProjectId;
   if (savedV2Region) v2Region.value = savedV2Region;
+  
+  // Load saved language selections for V2
+  const savedV2Languages = localStorage.getItem('v2SelectedLanguages');
+  if (savedV2Languages) {
+    try {
+      const languages = JSON.parse(savedV2Languages);
+      // Uncheck all first
+      v2LanguageCheckboxes.forEach(checkbox => checkbox.checked = false);
+      // Then check the saved ones
+      languages.forEach(lang => {
+        const checkbox = document.getElementById(`lang-${lang}`);
+        if (checkbox) checkbox.checked = true;
+      });
+    } catch (e) {
+      console.error('Error loading saved languages:', e);
+    }
+  }
   
   // Set up event listeners
   recordButton.addEventListener('click', toggleRecording);
@@ -286,7 +303,35 @@ async function handleFileUpload() {
     // Create form data
     const formData = new FormData();
     formData.append('audio', file);
-    formData.append('languageCode', getLanguageCode());
+    // For V1, add language code directly
+    if (currentApiVersion === 'v1') {
+      formData.append('languageCode', getLanguageCode());
+    } else {
+      // For V2, we need to create a properly structured request
+      const projectId = v2ProjectId.value;
+      const region = v2Region.value;
+      const selectedLanguages = getSelectedLanguages();
+      
+      // Create the proper V2 request structure
+      const v2RequestData = {
+        recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
+        config: {
+          language_codes: selectedLanguages,
+          model: getModel(),
+          auto_decoding_config: {}
+        }
+        // content will be added by the server from the file
+      };
+      
+      // If service account file is provided, include it in the request
+      if (serviceAccountData) {
+        v2RequestData.serviceAccount = serviceAccountData;
+        logDebug('Using service account authentication for file upload', { projectId });
+      }
+      
+      // Add the structured request as JSON
+      formData.append('requestData', JSON.stringify(v2RequestData));
+    }
     formData.append('model', getModel());
     
     // Get API key
@@ -337,38 +382,21 @@ async function sendAudioToApi(base64Audio) {
     let requestBody;
     if (currentApiVersion === 'v1') {
       requestBody = {
-        config: {
-          languageCode: getLanguageCode(),
-          model: getModel(),
-          enableAutomaticPunctuation: true
-          // Do not specify encoding or sampleRateHertz
-          // Let Google auto-detect the audio format
-        },
+        model: getModel(),
         audio: {
           content: base64Audio
         }
       };
+      requestBody.languageCode = getLanguageCode();
     } else {
-      // Get project ID for V2 API
-      const projectId = v2ProjectId.value.trim();
-      if (!projectId) {
-        throw new Error('Project ID is required for V2 API');
-      }
+      // For V2 API, the request structure is different
+      const projectId = v2ProjectId.value;
+      const region = v2Region.value;
       
-      // Save project ID to localStorage
-      localStorage.setItem('v2ProjectId', projectId);
-      
-      // Get region for V2 API
-      const region = v2Region.value.trim() || 'us-central1';
-      
-      // Save region to localStorage
-      localStorage.setItem('v2Region', region);
-      
-      // Create the basic request body
       requestBody = {
         recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
         config: {
-          language_codes: [getLanguageCode()],
+          language_codes: getSelectedLanguages(),
           model: getModel(),
           auto_decoding_config: {}
         },
@@ -380,6 +408,14 @@ async function sendAudioToApi(base64Audio) {
         requestBody.serviceAccount = serviceAccountData;
         logDebug('Using service account authentication', { projectId });
       }
+      
+      // Save project ID and region to localStorage
+      localStorage.setItem('v2ProjectId', v2ProjectId.value);
+      localStorage.setItem('v2Region', v2Region.value);
+      
+      // Save selected languages
+      const selectedLanguages = getSelectedLanguages();
+      localStorage.setItem('v2SelectedLanguages', JSON.stringify(selectedLanguages));
     }
     
     logDebug('Sending request to API', { 
@@ -397,8 +433,8 @@ async function sendAudioToApi(base64Audio) {
     
     // Add project ID and region to URL for V2 API
     if (currentApiVersion === 'v2') {
-      const projectId = v2ProjectId.value.trim();
-      const region = v2Region.value.trim() || 'us-central1';
+      const projectId = v2ProjectId.value;
+      const region = v2Region.value;
       apiUrl += `&project=${projectId}&region=${region}`;
     }
     
@@ -510,7 +546,23 @@ function getApiKey() {
 }
 
 function getLanguageCode() {
-  return currentApiVersion === 'v1' ? v1Language.value : v2Language.value;
+  return currentApiVersion === 'v1' ? v1Language.value : getSelectedLanguages()[0] || 'en-US';
+}
+
+function getSelectedLanguages() {
+  if (currentApiVersion === 'v1') {
+    return [v1Language.value];
+  } else {
+    // For V2, get all selected language checkboxes
+    const selectedLanguages = [];
+    v2LanguageCheckboxes.forEach(checkbox => {
+      if (checkbox.checked) {
+        selectedLanguages.push(checkbox.value);
+      }
+    });
+    // If nothing selected, default to en-US
+    return selectedLanguages.length > 0 ? selectedLanguages : ['en-US'];
+  }
 }
 
 function getModel() {
