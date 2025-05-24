@@ -146,7 +146,14 @@ app.post('/api/speech/:version', async (req, res) => {
     
     // Log final request details
     console.log('Request URL:', apiUrl);
-    console.log('Request headers:', JSON.stringify(headers, null, 2));
+    
+    // Create a copy of headers for logging with truncated Authorization
+    const logHeaders = { ...headers };
+    if (logHeaders.Authorization) {
+      logHeaders.Authorization = `${logHeaders.Authorization.substring(0, 25)}...`;
+    }
+    console.log('Request headers:', JSON.stringify(logHeaders, null, 2));
+    
     console.log('Request body structure:', JSON.stringify({
       ...requestData,
       content: '[BASE64_AUDIO_CONTENT]'
@@ -167,6 +174,23 @@ app.post('/api/speech/:version', async (req, res) => {
     console.log(`Response status: ${response.status}`);
     if (response.status !== 200) {
       console.log('Error response:', response.data);
+    } else {
+      // For successful responses, print recognition results in plain text
+      if (response.data && response.data.results) {
+        // Handle v1 API response format
+        const transcripts = response.data.results
+          .map(result => result.alternatives && result.alternatives[0] ? result.alternatives[0].transcript : '')
+          .filter(text => text)
+          .join(' ');
+        console.log('Recognition result:', transcripts);
+      } else if (response.data && response.data.results && response.data.results.length > 0) {
+        // Handle v2 API response format
+        const transcripts = response.data.results
+          .map(result => result.alternatives && result.alternatives[0] ? result.alternatives[0].transcript : '')
+          .filter(text => text)
+          .join(' ');
+        console.log('Recognition result:', transcripts);
+      }
     }
     
     // Forward the response exactly as-is back to the client
