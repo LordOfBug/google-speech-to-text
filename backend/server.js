@@ -114,9 +114,29 @@ app.post('/api/speech/:version', async (req, res) => {
       console.log('Using API key authentication');
     }
     
-    // Step 5: Create a clean request body with correct structure for V2
-    if (version === 'v2') {
-      // Extract necessary fields
+    // Create a clean request body with correct structure based on API version
+    if (version === 'v1') {
+      // Extract necessary fields for V1
+      const languageCode = requestData.languageCode || requestData.config?.languageCode || 'en-US';
+      const model = requestData.model || requestData.config?.model || 'default';
+      const content = requestData.content || (requestData.audio && requestData.audio.content);
+      
+      // Create clean request body for V1 API
+      requestData = {
+        config: {
+          languageCode: languageCode,
+          model: model,
+          enableAutomaticPunctuation: true
+        },
+        audio: {
+          content: content
+        }
+      };
+      
+      // Log the V1 API request fields for debugging
+      console.log('V1 API request with languageCode:', languageCode, 'and model:', model);
+    } else if (version === 'v2') {
+      // Extract necessary fields for V2
       const projectId = req.query.project || requestData.projectId || 'speech-to-text-proxy';
       const region = req.query.region || requestData.region || 'us-central1';
       const languageCodes = Array.isArray(requestData.config?.language_codes) 
@@ -125,7 +145,7 @@ app.post('/api/speech/:version', async (req, res) => {
       const model = requestData.config?.model || requestData.model || 'chirp';
       const content = requestData.content;
       
-      // Create clean request body
+      // Create clean request body for V2 API
       requestData = {
         config: {
           language_codes: languageCodes,
@@ -154,10 +174,21 @@ app.post('/api/speech/:version', async (req, res) => {
     }
     console.log('Request headers:', JSON.stringify(logHeaders, null, 2));
     
-    console.log('Request body structure:', JSON.stringify({
-      ...requestData,
-      content: '[BASE64_AUDIO_CONTENT]'
-    }, null, 2));
+    if (version === 'v2') {
+      console.log('Request body structure:', JSON.stringify({
+        ...requestData,
+        content: '[BASE64_AUDIO_CONTENT]'
+      }, null, 2));
+    }
+    else {
+      console.log('Request body structure:', JSON.stringify({
+        ...requestData,
+        audio: {
+          ...requestData.audio,
+          content: '[BASE64_AUDIO_CONTENT]'
+        }
+      }, null, 2));
+    }
     
     // Forward the request to Google's API
     const response = await axios({
@@ -190,6 +221,9 @@ app.post('/api/speech/:version', async (req, res) => {
           .filter(text => text)
           .join(' ');
         console.log('Recognition result:', transcripts);
+      }
+      else {
+        console.log('Recognition RAW result:', response.data);
       }
     }
     
