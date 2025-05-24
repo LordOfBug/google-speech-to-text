@@ -219,6 +219,31 @@
             </div>
             <div class="row mb-3">
               <div class="col-md-6">
+                <label for="groq-language" class="form-label">Language (Optional)</label>
+                <select class="form-select" id="groq-language">
+                  <option value="">Auto-detect (default)</option>
+                  <option value="en">English (en)</option>
+                  <option value="es">Spanish (es)</option>
+                  <option value="fr">French (fr)</option>
+                  <option value="de">German (de)</option>
+                  <option value="it">Italian (it)</option>
+                  <option value="pt">Portuguese (pt)</option>
+                  <option value="nl">Dutch (nl)</option>
+                  <option value="ja">Japanese (ja)</option>
+                  <option value="zh">Chinese (zh)</option>
+                  <option value="ru">Russian (ru)</option>
+                  <option value="ar">Arabic (ar)</option>
+                </select>
+                <div class="form-text">Specifying a language can improve accuracy and latency.</div>
+              </div>
+              <div class="col-md-6">
+                <label for="groq-prompt" class="form-label">Prompt (Optional)</label>
+                <input type="text" class="form-control" id="groq-prompt" placeholder="Guide the model's style or continue previous segment">
+                <div class="form-text">Text to guide the model's style. Should match the audio language.</div>
+              </div>
+            </div>
+            <div class="row mb-3">
+              <div class="col-md-6">
                 <label for="groq-file-upload" class="form-label">Upload Audio File (Optional)</label>
                 <input class="form-control" type="file" id="groq-file-upload" accept="audio/*">
               </div>

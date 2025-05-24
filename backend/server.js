@@ -71,9 +71,11 @@ app.post('/api/groq/speech', async (req, res) => {
       });
     }
     
-    // Extract model and audio content
+    // Extract model, audio content, and optional parameters
     const model = req.body.model || 'whisper-large-v3';
     const content = req.body.content;
+    const language = req.body.language || null;
+    const prompt = req.body.prompt || null;
     
     if (!content) {
       return res.status(400).json({
@@ -101,6 +103,15 @@ app.post('/api/groq/speech', async (req, res) => {
     formData.append('file', blob, 'audio.webm');
     formData.append('model', model);
     
+    // Add optional parameters if provided
+    if (language) {
+      formData.append('language', language);
+    }
+    
+    if (prompt) {
+      formData.append('prompt', prompt);
+    }
+    
     // Log request details (with truncated content)
     console.log('Request URL:', apiUrl);
     
@@ -112,7 +123,9 @@ app.post('/api/groq/speech', async (req, res) => {
     console.log('Request headers:', JSON.stringify(logHeaders, null, 2));
     console.log('Request body structure:', JSON.stringify({
       model: model,
-      file: '[AUDIO_FILE_CONTENT]'
+      file: '[AUDIO_FILE_CONTENT]',
+      language: language || 'auto-detect',
+      prompt: prompt || null
     }, null, 2));
     
     // Forward the request to Groq's API
@@ -628,8 +641,10 @@ app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => 
       });
     }
     
-    // Extract model
+    // Extract model and optional parameters
     const model = req.body.model || 'whisper-large-v3';
+    const language = req.body.language || null;
+    const prompt = req.body.prompt || null;
     
     // Groq API URL
     const apiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions';
@@ -651,6 +666,15 @@ app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => 
     });
     form.append('model', model);
     
+    // Add optional parameters if provided
+    if (language) {
+      form.append('language', language);
+    }
+    
+    if (prompt) {
+      form.append('prompt', prompt);
+    }
+    
     // Log request details
     console.log('File upload request URL:', apiUrl);
     
@@ -662,7 +686,9 @@ app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => 
     console.log('File upload request headers:', JSON.stringify(logHeaders, null, 2));
     console.log('File upload request body structure:', JSON.stringify({
       model: model,
-      file: '[AUDIO_FILE_CONTENT]'
+      file: '[AUDIO_FILE_CONTENT]',
+      language: language || 'auto-detect',
+      prompt: prompt || null
     }, null, 2));
     
     // Forward the request to Groq's API

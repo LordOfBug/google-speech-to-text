@@ -31,6 +31,8 @@ const v2FileUpload = document.getElementById('v2-file-upload');
 // Groq API Inputs
 const groqApiKey = document.getElementById('groq-api-key');
 const groqModel = document.getElementById('groq-model');
+const groqLanguage = document.getElementById('groq-language');
+const groqPrompt = document.getElementById('groq-prompt');
 const groqFileUpload = document.getElementById('groq-file-upload');
 
 // Service account data
@@ -373,8 +375,20 @@ async function handleFileUpload() {
       formData.append('model', getModel());
       formData.append('apiKey', getApiKey());
       
+      // Add language if specified
+      if (groqLanguage.value) {
+        formData.append('language', groqLanguage.value);
+      }
+      
+      // Add prompt if specified
+      if (groqPrompt.value) {
+        formData.append('prompt', groqPrompt.value);
+      }
+      
       logDebug('Preparing Groq file upload', {
         model: getModel(),
+        language: groqLanguage.value || 'auto-detect',
+        prompt: groqPrompt.value || 'none',
         fileName: file.name
       });
     } else if (currentApiVersion === 'v1') {
@@ -508,6 +522,16 @@ async function sendAudioToApi(base64Audio) {
         model: getModel(),
         content: base64Audio
       };
+      
+      // Add language if specified
+      if (groqLanguage.value) {
+        requestBody.language = groqLanguage.value;
+      }
+      
+      // Add prompt if specified
+      if (groqPrompt.value) {
+        requestBody.prompt = groqPrompt.value;
+      }
     } else {
       // For Google Speech API (v1 or v2)
       endpoint = `/api/speech/${currentApiVersion}`;
