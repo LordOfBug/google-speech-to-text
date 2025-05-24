@@ -10,24 +10,9 @@ const debugCard = document.getElementById('debug-card');
 const debugOutput = document.getElementById('debug-output');
 const audioLevelFill = document.getElementById('audio-level-fill');
 
-// API Version Tabs
-const v1Tab = document.getElementById('v1-tab');
-const v2Tab = document.getElementById('v2-tab');
+// API Tabs
+const googleTab = document.getElementById('google-tab');
 const groqTab = document.getElementById('groq-tab');
-
-// API Inputs
-const v1ApiKey = document.getElementById('v1-api-key');
-const v1Language = document.getElementById('v1-language');
-const v1Model = document.getElementById('v1-model');
-const v1FileUpload = document.getElementById('v1-file-upload');
-
-const v2ApiKey = document.getElementById('v2-api-key');
-const v2ProjectId = document.getElementById('v2-project-id');
-const v2Region = document.getElementById('v2-region');
-const v2ServiceAccount = document.getElementById('v2-service-account');
-const v2LanguageCheckboxes = document.querySelectorAll('.v2-language-checkbox');
-const v2Model = document.getElementById('v2-model');
-const v2FileUpload = document.getElementById('v2-file-upload');
 
 // Groq API Inputs
 const groqApiKey = document.getElementById('groq-api-key');
@@ -55,6 +40,18 @@ let webSocket = null;
 let isStreaming = false;
 let streamingInterimTranscript = '';
 
+// Get unified Google Speech elements
+const googleApiKey = document.getElementById('google-api-key');
+const googleServiceAccount = document.getElementById('google-service-account');
+const googleProjectId = document.getElementById('google-project-id');
+const googleRegion = document.getElementById('google-region');
+const googleLanguage = document.getElementById('google-language');
+const googleLanguageCheckboxes = document.querySelectorAll('.google-language-checkbox');
+const googleModel = document.getElementById('google-model');
+const googleFileUpload = document.getElementById('google-file-upload');
+const googleV1Radio = document.getElementById('google-v1');
+const googleV2Radio = document.getElementById('google-v2');
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   // Load saved API keys, project ID and region from localStorage
@@ -64,28 +61,42 @@ document.addEventListener('DOMContentLoaded', () => {
   const savedV2Region = localStorage.getItem('v2Region');
   const savedGroqKey = localStorage.getItem('groqApiKey');
   
-  if (savedV1Key) v1ApiKey.value = savedV1Key;
-  if (savedV2Key) v2ApiKey.value = savedV2Key;
-  if (savedV2ProjectId) v2ProjectId.value = savedV2ProjectId;
-  if (savedV2Region) v2Region.value = savedV2Region;
+  // Set values from localStorage for the unified Google tab
+  if (savedV1Key || savedV2Key) {
+    googleApiKey.value = savedV1Key || savedV2Key;
+  }
+  if (savedV2ProjectId) googleProjectId.value = savedV2ProjectId;
+  if (savedV2Region) googleRegion.value = savedV2Region;
   if (savedGroqKey) groqApiKey.value = savedGroqKey;
   
-  // Load saved language selections for V2
+  // Load saved language selections for Google V2
   const savedV2Languages = localStorage.getItem('v2SelectedLanguages');
   if (savedV2Languages) {
     try {
       const languages = JSON.parse(savedV2Languages);
       // Uncheck all first
-      v2LanguageCheckboxes.forEach(checkbox => checkbox.checked = false);
+      googleLanguageCheckboxes.forEach(checkbox => checkbox.checked = false);
       // Then check the saved ones
       languages.forEach(lang => {
-        const checkbox = document.getElementById(`lang-${lang}`);
+        const checkbox = document.getElementById(`google-lang-${lang}`);
         if (checkbox) checkbox.checked = true;
       });
     } catch (e) {
       console.error('Error loading saved languages:', e);
     }
   }
+  
+  // Set up Google API version toggle
+  googleV1Radio.addEventListener('change', toggleGoogleApiVersion);
+  googleV2Radio.addEventListener('change', toggleGoogleApiVersion);
+  
+  // Default to V1 if no version is selected
+  if (!googleV1Radio.checked && !googleV2Radio.checked) {
+    googleV1Radio.checked = true;
+  }
+  
+  // Initialize the Google API version UI
+  toggleGoogleApiVersion();
   
   // Set up event listeners
   recordButton.addEventListener('click', toggleRecording);
@@ -99,13 +110,15 @@ document.addEventListener('DOMContentLoaded', () => {
     return new bootstrap.Tooltip(tooltipTriggerEl);
   });
   
-  // API version tab switching
-  v1Tab.addEventListener('click', () => setApiVersion('v1'));
-  v2Tab.addEventListener('click', () => setApiVersion('v2'));
+  // API tab switching - now just Google and Groq
+  googleTab.addEventListener('click', () => {
+    // Keep the current V1/V2 selection when switching to Google tab
+    setApiVersion(currentApiVersion === 'groq' ? (googleV1Radio.checked ? 'v1' : 'v2') : currentApiVersion);
+  });
   groqTab.addEventListener('click', () => setApiVersion('groq'));
   
-  // Service account file upload
-  v2ServiceAccount.addEventListener('change', handleServiceAccountUpload);
+  // Service account file upload for unified Google tab
+  googleServiceAccount.addEventListener('change', handleServiceAccountUpload);
   
   // Initialize debug mode from localStorage
   const debugMode = localStorage.getItem('debugMode') === 'true';
@@ -132,9 +145,15 @@ function handleServiceAccountUpload(event) {
       serviceAccountData = jsonData;
       
       // Extract project ID from service account if available
-      if (jsonData.project_id && !v2ProjectId.value) {
-        v2ProjectId.value = jsonData.project_id;
+      if (jsonData.project_id && !googleProjectId.value) {
+        googleProjectId.value = jsonData.project_id;
         localStorage.setItem('v2ProjectId', jsonData.project_id);
+      }
+      
+      // If we're using V1 API, switch to V2 since service account works better with V2
+      if (currentApiVersion === 'v1') {
+        googleV2Radio.checked = true;
+        toggleGoogleApiVersion();
       }
       
       statusElement.textContent = 'Service account loaded successfully';
@@ -157,41 +176,41 @@ function handleServiceAccountUpload(event) {
 function setApiVersion(version) {
   currentApiVersion = version;
   
-  // Update UI
-  if (version === 'v1') {
-    v1Tab.classList.add('active');
-    v1Tab.setAttribute('aria-selected', 'true');
-    v2Tab.classList.remove('active');
-    v2Tab.setAttribute('aria-selected', 'false');
+  // Update UI for tab selection
+  if (version === 'v1' || version === 'v2') {
+    // For Google APIs (both V1 and V2)
+    googleTab.classList.add('active');
+    googleTab.setAttribute('aria-selected', 'true');
     groqTab.classList.remove('active');
     groqTab.setAttribute('aria-selected', 'false');
     
-    document.getElementById('v1-content').classList.add('show', 'active');
-    document.getElementById('v2-content').classList.remove('show', 'active');
+    // Show Google content tab
+    document.getElementById('google-content').classList.add('show', 'active');
     document.getElementById('groq-content').classList.remove('show', 'active');
-  } else if (version === 'v2') {
-    v2Tab.classList.add('active');
-    v2Tab.setAttribute('aria-selected', 'true');
-    v1Tab.classList.remove('active');
-    v1Tab.setAttribute('aria-selected', 'false');
-    groqTab.classList.remove('active');
-    groqTab.setAttribute('aria-selected', 'false');
     
-    document.getElementById('v2-content').classList.add('show', 'active');
-    document.getElementById('v1-content').classList.remove('show', 'active');
-    document.getElementById('groq-content').classList.remove('show', 'active');
+    // Update the radio button selection based on version
+    if (version === 'v1') {
+      googleV1Radio.checked = true;
+    } else {
+      googleV2Radio.checked = true;
+    }
+    
+    // Update the UI based on V1/V2 selection
+    toggleGoogleApiVersion();
+    
   } else if (version === 'groq') {
+    // For Groq API
     groqTab.classList.add('active');
     groqTab.setAttribute('aria-selected', 'true');
-    v1Tab.classList.remove('active');
-    v1Tab.setAttribute('aria-selected', 'false');
-    v2Tab.classList.remove('active');
-    v2Tab.setAttribute('aria-selected', 'false');
+    googleTab.classList.remove('active');
+    googleTab.setAttribute('aria-selected', 'false');
     
+    // Show Groq content tab
     document.getElementById('groq-content').classList.add('show', 'active');
-    document.getElementById('v1-content').classList.remove('show', 'active');
-    document.getElementById('v2-content').classList.remove('show', 'active');
+    document.getElementById('google-content').classList.remove('show', 'active');
   }
+  
+  logDebug(`API version set to: ${version}`);
 }
 
 // Toggle debug mode
@@ -218,6 +237,52 @@ function toggleStreamingMode() {
     webSocket.close();
     webSocket = null;
   }
+}
+
+// Toggle between Google V1 and V2 API options
+function toggleGoogleApiVersion() {
+  const isV1 = googleV1Radio.checked;
+  const isV2 = googleV2Radio.checked;
+  
+  // Update current API version
+  currentApiVersion = isV1 ? 'v1' : 'v2';
+  
+  // Show/hide V1-specific elements
+  document.querySelectorAll('.v1-only').forEach(el => {
+    el.style.display = isV1 ? 'block' : 'none';
+  });
+  
+  // Show/hide V2-specific elements
+  document.querySelectorAll('.v2-only').forEach(el => {
+    el.style.display = isV2 ? 'block' : 'none';
+  });
+  
+  // Update model options
+  if (isV1) {
+    // Show only V1 model options
+    googleModel.querySelectorAll('optgroup.v1-only').forEach(group => {
+      group.style.display = 'block';
+    });
+    googleModel.querySelectorAll('optgroup.v2-only').forEach(group => {
+      group.style.display = 'none';
+    });
+    // Select first V1 model option
+    const firstV1Option = googleModel.querySelector('optgroup.v1-only option');
+    if (firstV1Option) firstV1Option.selected = true;
+  } else {
+    // Show only V2 model options
+    googleModel.querySelectorAll('optgroup.v1-only').forEach(group => {
+      group.style.display = 'none';
+    });
+    googleModel.querySelectorAll('optgroup.v2-only').forEach(group => {
+      group.style.display = 'block';
+    });
+    // Select first V2 model option
+    const firstV2Option = googleModel.querySelector('optgroup.v2-only option');
+    if (firstV2Option) firstV2Option.selected = true;
+  }
+  
+  logDebug(`Switched to Google ${currentApiVersion} API`);
 }
 
 // Connect to WebSocket server
@@ -393,7 +458,7 @@ async function startRecording() {
               const base64Audio = reader.result.split(',')[1];
               
               // Send audio chunk to WebSocket server
-              webSocket.send(JSON.stringify({
+              const streamData = {
                 type: 'start_stream',
                 api: api,
                 apiKey: getApiKey(),
@@ -404,7 +469,14 @@ async function startRecording() {
                 prompt: currentApiVersion === 'groq' ? groqPrompt.value : null,
                 fileType: mediaRecorder.mimeType,
                 fileName: `recording.${mediaRecorder.mimeType.split('/')[1].split(';')[0]}`
-              }));
+              };
+              
+              // Add service account data if available for Google
+              if (api === 'google' && serviceAccountData) {
+                streamData.serviceAccount = serviceAccountData;
+              }
+              
+              webSocket.send(JSON.stringify(streamData));
               
               // If Groq, clear streaming chunks after sending
               if (api === 'groq') {
@@ -504,9 +576,12 @@ function visualizeAudio() {
 // Handle file upload
 async function handleFileUpload() {
   let fileInput;
-  if (currentApiVersion === 'v1') fileInput = v1FileUpload;
-  else if (currentApiVersion === 'v2') fileInput = v2FileUpload;
-  else if (currentApiVersion === 'groq') fileInput = groqFileUpload;
+  if (currentApiVersion === 'groq') {
+    fileInput = groqFileUpload;
+  } else {
+    // For Google (both V1 and V2)
+    fileInput = googleFileUpload;
+  }
   
   if (!fileInput.files.length) {
     statusElement.textContent = 'Please select an audio file first';
@@ -536,10 +611,10 @@ async function handleFileUpload() {
       reader.onload = () => {
         const base64Audio = reader.result.split(',')[1];
         
-        // Send to WebSocket server for streaming
-        webSocket.send(JSON.stringify({
+        // Prepare data for WebSocket server streaming
+        const streamData = {
           type: 'start_stream',
-          api: currentApiVersion === 'groq' ? 'groq' : 'google',
+          api: currentApiVersion, // Pass the actual version (v1, v2, or groq)
           apiKey: getApiKey(),
           content: base64Audio,
           model: getModel(),
@@ -548,7 +623,15 @@ async function handleFileUpload() {
           prompt: currentApiVersion === 'groq' ? groqPrompt.value : null,
           fileType: fileType,
           fileName: fileName
-        }));
+        };
+        
+        // Add service account data if available for Google
+        if ((currentApiVersion === 'v1' || currentApiVersion === 'v2') && serviceAccountData) {
+          streamData.serviceAccount = serviceAccountData;
+        }
+        
+        // Send to WebSocket server for streaming
+        webSocket.send(JSON.stringify(streamData));
         
         logDebug('Sent file to WebSocket server for streaming transcription');
       };
@@ -766,8 +849,8 @@ async function sendAudioToApi(base64Audio) {
         };
       } else {
         // For V2 API, the request structure is different
-        const projectId = v2ProjectId.value;
-        const region = v2Region.value;
+        const projectId = googleProjectId.value;
+        const region = googleRegion.value;
         
         // For Chirp model with multiple languages, we can specify all expected languages
         const languages = getSelectedLanguages();
@@ -794,16 +877,19 @@ async function sendAudioToApi(base64Audio) {
     }
     
     // Save API key to localStorage
-    if (currentApiVersion === 'v1') {
-      localStorage.setItem('v1ApiKey', apiKey);
-    } else if (currentApiVersion === 'v2') {
-      localStorage.setItem('v2ApiKey', apiKey);
-      localStorage.setItem('v2ProjectId', v2ProjectId.value);
-      localStorage.setItem('v2Region', v2Region.value);
+    if (currentApiVersion === 'v1' || currentApiVersion === 'v2') {
+      // For Google (both V1 and V2)
+      localStorage.setItem(`${currentApiVersion}ApiKey`, apiKey);
       
-      // Save selected languages
-      const selectedLanguages = getSelectedLanguages();
-      localStorage.setItem('v2SelectedLanguages', JSON.stringify(selectedLanguages));
+      // For V2, also save project ID, region, and selected languages
+      if (currentApiVersion === 'v2') {
+        localStorage.setItem('v2ProjectId', googleProjectId.value);
+        localStorage.setItem('v2Region', googleRegion.value);
+        
+        // Save selected languages
+        const selectedLanguages = getSelectedLanguages();
+        localStorage.setItem('v2SelectedLanguages', JSON.stringify(selectedLanguages));
+      }
     } else if (currentApiVersion === 'groq') {
       localStorage.setItem('groqApiKey', apiKey);
     }
@@ -830,8 +916,8 @@ async function sendAudioToApi(base64Audio) {
       
       // Add project ID and region to URL for V2 API
       if (currentApiVersion === 'v2') {
-        const projectId = v2ProjectId.value;
-        const region = v2Region.value;
+        const projectId = googleProjectId.value;
+        const region = googleRegion.value;
         apiUrl += `&project=${projectId}&region=${region}`;
       }
     }
@@ -940,23 +1026,34 @@ function processResults(data) {
 
 // Helper functions
 function getApiKey() {
-  if (currentApiVersion === 'v1') return v1ApiKey.value;
-  if (currentApiVersion === 'v2') return v2ApiKey.value;
-  if (currentApiVersion === 'groq') return groqApiKey.value;
-  return '';
+  if (currentApiVersion === 'groq') {
+    return groqApiKey.value;
+  } else {
+    // For Google (both V1 and V2)
+    return googleApiKey.value;
+  }
 }
 
 function getLanguageCode() {
-  return currentApiVersion === 'v1' ? v1Language.value : getSelectedLanguages()[0] || 'en-US';
+  if (currentApiVersion === 'groq') {
+    return groqLanguage.value || 'en';
+  } else if (currentApiVersion === 'v1') {
+    return googleLanguage.value || 'en-US';
+  } else {
+    // For V2, get the first selected language or default to en-US
+    return getSelectedLanguages()[0] || 'en-US';
+  }
 }
 
 function getSelectedLanguages() {
-  if (currentApiVersion === 'v1') {
-    return [v1Language.value];
+  if (currentApiVersion === 'groq') {
+    return [groqLanguage.value || 'en'];
+  } else if (currentApiVersion === 'v1') {
+    return [googleLanguage.value || 'en-US'];
   } else {
     // For V2, get all selected language checkboxes
     const selectedLanguages = [];
-    v2LanguageCheckboxes.forEach(checkbox => {
+    googleLanguageCheckboxes.forEach(checkbox => {
       if (checkbox.checked) {
         selectedLanguages.push(checkbox.value);
       }
@@ -967,8 +1064,18 @@ function getSelectedLanguages() {
 }
 
 function getModel() {
-  if (currentApiVersion === 'v1') return v1Model.value;
-  if (currentApiVersion === 'v2') return v2Model.value;
-  if (currentApiVersion === 'groq') return groqModel.value;
-  return '';
+  if (currentApiVersion === 'groq') {
+    return groqModel.value;
+  } else {
+    // For Google (both V1 and V2)
+    return googleModel.value;
+  }
+}
+
+// Get service account data
+function getServiceAccountData() {
+  if (currentApiVersion === 'groq' || !googleServiceAccount.files || googleServiceAccount.files.length === 0) {
+    return null;
+  }
+  return serviceAccountData;
 }

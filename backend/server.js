@@ -819,10 +819,12 @@ wss.on('connection', (ws) => {
 async function handleGoogleStreamingRequest(ws, data) {
   try {
     // Extract parameters from the request
-    const { apiKey, content, languageCode, model } = data;
+    const { api, apiKey, content, languageCode, model, serviceAccount } = data;
+    const apiVersion = api || 'v1'; // Default to v1 if not specified
     
-    if (!apiKey) {
-      ws.send(JSON.stringify({ type: 'error', message: 'API key is required' }));
+    // Check if we have authentication information
+    if (!apiKey && !serviceAccount) {
+      ws.send(JSON.stringify({ type: 'error', message: 'API key or service account is required' }));
       return;
     }
     
@@ -832,23 +834,78 @@ async function handleGoogleStreamingRequest(ws, data) {
     }
     
     // Send acknowledgment to client
-    ws.send(JSON.stringify({ type: 'start', message: 'Starting Google streaming transcription' }));
+    ws.send(JSON.stringify({ 
+      type: 'start', 
+      message: `Starting Google ${apiVersion} streaming transcription` 
+    }));
     
-    // Create a client with API key authentication
-    const client = new speech.SpeechClient({ 
-      credentials: { client_email: null, private_key: null },
-      projectId: 'placeholder-project',
-      authClient: new GoogleAuth().fromAPIKey(apiKey)
-    });
+    // Create a client based on the authentication method
+    let client;
     
-    // Create streaming recognize request
-    const request = {
-      config: {
-        encoding: 'WEBM_OPUS',
-        sampleRateHertz: 48000,
-        languageCode: languageCode || 'en-US',
-        model: model || 'default',
-        enableAutomaticPunctuation: true,
+    if (serviceAccount) {
+      // Use service account authentication if provided
+      try {
+        // Create a temporary file for the service account JSON
+        const serviceAccountPath = path.join(uploadsDir, `service_account_${Date.now()}.json`);
+        fs.writeFileSync(serviceAccountPath, JSON.stringify(serviceAccount));
+        
+        // Create client with service account
+        client = new speech.SpeechClient({
+          keyFilename: serviceAccountPath
+        });
+        
+        // Clean up the temporary file
+        setTimeout(() => {
+          fs.unlink(serviceAccountPath, (err) => {
+            if (err) console.error('Error deleting service account file:', err);
+          });
+        }, 1000);
+        
+        console.log(`Using service account authentication for Google ${apiVersion} streaming`);
+      } catch (error) {
+        console.error('Error creating client with service account:', error);
+        ws.send(JSON.stringify({ type: 'error', message: `Service account error: ${error.message}` }));
+        return;
+      }
+    } else {
+      // Use API key authentication
+      try {
+        // API key authentication has limitations with streaming
+        if (apiVersion === 'v2') {
+          ws.send(JSON.stringify({ 
+            type: 'warning', 
+            message: 'Google Speech V2 streaming with API key has limitations. For best results, use a service account.'
+          }));
+        }
+        
+        client = new speech.SpeechClient({ 
+          credentials: { client_email: null, private_key: null },
+          projectId: 'placeholder-project',
+          authClient: new GoogleAuth().fromAPIKey(apiKey)
+        });
+        console.log(`Using API key authentication for Google ${apiVersion} streaming`);
+      } catch (error) {
+        console.error('Error creating client with API key:', error);
+        ws.send(JSON.stringify({ type: 'error', message: `API key error: ${error.message}` }));
+        return;
+      }
+    }
+    
+    // Create streaming recognize request with appropriate configuration based on API version
+    let requestConfig = {
+      encoding: 'WEBM_OPUS',
+      sampleRateHertz: 48000,
+      languageCode: languageCode || 'en-US',
+      enableAutomaticPunctuation: true
+    };
+    
+    // Handle model differently based on API version
+    if (apiVersion === 'v1') {
+      // For V1, we can use the model directly
+      requestConfig.model = model || 'default';
+      
+      // Add V1-specific options
+      Object.assign(requestConfig, {
         enableWordTimeOffsets: false,
         useEnhanced: true,
         maxAlternatives: 1,
@@ -858,8 +915,22 @@ async function handleGoogleStreamingRequest(ws, data) {
         }],
         enableWordConfidence: true,
         enableSpokenPunctuation: true,
-        enableSpokenEmojis: true,
-      },
+        enableSpokenEmojis: true
+      });
+    }
+    // For V2, we need to be more careful with the model names
+    else if (apiVersion === 'v2') {
+      // V2 has different model naming conventions
+      // Only set the model if it's a valid V2 model name
+      if (model && (model === 'chirp' || model === 'chirp_2' || model === 'chirp_3' || model === 'latest_long' || model === 'latest_short' || model === 'telephony')) {
+        requestConfig.model = model;
+      }
+      // Otherwise, don't set a model at all to use the default
+      console.log(`Using Google V2 API with model: ${model || 'default'}`);
+    }
+    
+    const request = {
+      config: requestConfig,
       interimResults: true
     };
     
