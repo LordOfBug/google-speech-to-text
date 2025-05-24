@@ -5,6 +5,7 @@ const statusElement = document.getElementById('status');
 const transcriptElement = document.getElementById('transcript');
 const confidenceElement = document.getElementById('confidence');
 const debugModeCheckbox = document.getElementById('debug-mode');
+const streamingModeCheckbox = document.getElementById('streaming-mode');
 const debugCard = document.getElementById('debug-card');
 const debugOutput = document.getElementById('debug-output');
 const audioLevelFill = document.getElementById('audio-level-fill');
@@ -42,11 +43,17 @@ let serviceAccountData = null;
 let isRecording = false;
 let mediaRecorder = null;
 let audioChunks = [];
+let streamingAudioChunks = [];
 let animationFrameId = null;
 let audioContext = null;
 let analyser = null;
 let microphoneStream = null;
 let currentApiVersion = 'v1';
+
+// WebSocket and streaming state
+let webSocket = null;
+let isStreaming = false;
+let streamingInterimTranscript = '';
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -83,7 +90,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set up event listeners
   recordButton.addEventListener('click', toggleRecording);
   uploadButton.addEventListener('click', handleFileUpload);
-  debugModeCheckbox.addEventListener('checked', toggleDebugMode);
+  debugModeCheckbox.addEventListener('change', toggleDebugMode);
+  streamingModeCheckbox.addEventListener('change', toggleStreamingMode);
+  
+  // Initialize tooltips
+  const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+  tooltipTriggerList.map(function (tooltipTriggerEl) {
+    return new bootstrap.Tooltip(tooltipTriggerEl);
+  });
   
   // API version tab switching
   v1Tab.addEventListener('click', () => setApiVersion('v1'));
@@ -184,7 +198,103 @@ function setApiVersion(version) {
 function toggleDebugMode() {
   const isDebugMode = debugModeCheckbox.checked;
   debugCard.style.display = isDebugMode ? 'block' : 'none';
-  localStorage.setItem('debugMode', isDebugMode);
+  
+  // Clear debug output when turning off debug mode
+  if (!isDebugMode) {
+    debugOutput.innerHTML = '';
+  }
+}
+
+// Toggle streaming mode
+function toggleStreamingMode() {
+  isStreaming = streamingModeCheckbox.checked;
+  logDebug(`Streaming mode ${isStreaming ? 'enabled' : 'disabled'}`);
+  
+  if (isStreaming) {
+    // Connect to WebSocket server when streaming mode is enabled
+    connectWebSocket();
+  } else if (webSocket) {
+    // Disconnect WebSocket when streaming mode is disabled
+    webSocket.close();
+    webSocket = null;
+  }
+}
+
+// Connect to WebSocket server
+function connectWebSocket() {
+  if (webSocket && webSocket.readyState === WebSocket.OPEN) {
+    logDebug('WebSocket already connected');
+    return;
+  }
+  
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}`;
+  
+  logDebug(`Connecting to WebSocket server at ${wsUrl}`);
+  
+  webSocket = new WebSocket(wsUrl);
+  
+  webSocket.onopen = () => {
+    logDebug('WebSocket connection established');
+  };
+  
+  webSocket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      logDebug('WebSocket message received', data);
+      
+      if (data.type === 'connected') {
+        logDebug('WebSocket connection confirmed');
+      } else if (data.type === 'transcription') {
+        // Update transcript with streaming results
+        updateStreamingTranscript(data);
+      } else if (data.type === 'error') {
+        console.error('WebSocket error:', data.message);
+        statusElement.textContent = `Error: ${data.message}`;
+        statusElement.className = 'alert alert-danger';
+      } else if (data.type === 'end') {
+        logDebug('Streaming ended');
+      }
+    } catch (error) {
+      console.error('Error parsing WebSocket message:', error);
+    }
+  };
+  
+  webSocket.onerror = (error) => {
+    console.error('WebSocket error:', error);
+    logDebug('WebSocket error', error);
+  };
+  
+  webSocket.onclose = () => {
+    logDebug('WebSocket connection closed');
+    
+    // Attempt to reconnect after a delay if streaming mode is still enabled
+    if (isStreaming) {
+      setTimeout(() => {
+        if (isStreaming) {
+          connectWebSocket();
+        }
+      }, 3000);
+    }
+  };
+}
+
+// Update transcript with streaming results
+function updateStreamingTranscript(data) {
+  const { transcript, isFinal, confidence } = data;
+  
+  if (isFinal) {
+    // Final result - update transcript and confidence
+    transcriptElement.textContent = transcript;
+    if (confidence) {
+      confidenceElement.textContent = `Confidence: ${(confidence * 100).toFixed(2)}%`;
+    }
+    streamingInterimTranscript = '';
+  } else {
+    // Interim result - show in transcript with styling
+    streamingInterimTranscript = transcript;
+    transcriptElement.innerHTML = `<span class="final-transcript">${transcriptElement.textContent}</span> <span class="interim-transcript">${streamingInterimTranscript}</span>`;
+  }
 }
 
 // Log debug information
@@ -216,74 +326,125 @@ async function toggleRecording() {
 // Start recording
 async function startRecording() {
   try {
-    statusElement.textContent = 'Requesting microphone access...';
-    statusElement.className = 'alert alert-info';
-    
     // Request microphone access
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     microphoneStream = stream;
     
-    // Set up audio context for visualizing audio levels
-    if (!audioContext) {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-    }
-    
+    // Set up audio context for visualization
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioContext.createAnalyser();
     const source = audioContext.createMediaStreamSource(stream);
     source.connect(analyser);
+    analyser.fftSize = 256;
     
-    // Start visualizing audio levels
+    // Start audio visualization
     visualizeAudio();
     
-    // Create MediaRecorder
-    mediaRecorder = new MediaRecorder(stream);
-    audioChunks = [];
+    // For Groq streaming, we need to use a format that's well-supported
+    // Try to use audio/wav if supported, otherwise fall back to other formats
+    let mimeType = 'audio/webm';
     
-    // Collect audio chunks
+    // Check for browser support of various audio formats
+    if (MediaRecorder.isTypeSupported('audio/wav')) {
+      mimeType = 'audio/wav';
+    } else if (MediaRecorder.isTypeSupported('audio/mp3')) {
+      mimeType = 'audio/mp3';
+    } else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+      mimeType = 'audio/webm;codecs=opus';
+    } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+      mimeType = 'audio/mp4';
+    }
+    
+    logDebug(`Using MIME type: ${mimeType} for recording`);
+    
+    // Create media recorder with high quality settings
+    mediaRecorder = new MediaRecorder(stream, {
+      mimeType: mimeType,
+      audioBitsPerSecond: 256000 // Higher bitrate for better quality
+    });
+    
+    // Handle media recorder data available event
+    let streamingChunks = [];
+    let lastSentTime = 0;
+    const MIN_CHUNK_INTERVAL = 2000; // 2 seconds minimum between sends for Groq
+    
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
+        // Always collect chunks for non-streaming mode
         audioChunks.push(event.data);
+        
+        // For streaming mode, also handle real-time streaming
+        if (isStreaming && webSocket && webSocket.readyState === WebSocket.OPEN) {
+          // Add chunk to streaming collection
+          streamingChunks.push(event.data);
+          
+          const now = Date.now();
+          const api = currentApiVersion === 'groq' ? 'groq' : 'google';
+          
+          // For Google API, send each chunk immediately
+          // For Groq API, collect chunks and send less frequently
+          if (api === 'google' || (api === 'groq' && now - lastSentTime >= MIN_CHUNK_INTERVAL)) {
+            // Create a combined blob from all chunks
+            const audioBlob = new Blob(streamingChunks, { type: mediaRecorder.mimeType });
+            
+            // Convert blob to base64
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64Audio = reader.result.split(',')[1];
+              
+              // Send audio chunk to WebSocket server
+              webSocket.send(JSON.stringify({
+                type: 'start_stream',
+                api: api,
+                apiKey: getApiKey(),
+                content: base64Audio,
+                model: getModel(),
+                languageCode: getLanguageCode(),
+                language: currentApiVersion === 'groq' ? groqLanguage.value : null,
+                prompt: currentApiVersion === 'groq' ? groqPrompt.value : null,
+                fileType: mediaRecorder.mimeType,
+                fileName: `recording.${mediaRecorder.mimeType.split('/')[1].split(';')[0]}`
+              }));
+              
+              // If Groq, clear streaming chunks after sending
+              if (api === 'groq') {
+                streamingChunks = [];
+                lastSentTime = now;
+              }
+            };
+            
+            reader.readAsDataURL(audioBlob);
+          }
+        }
       }
     };
     
-    // Handle recording stop
+    // Handle media recorder stop event
     mediaRecorder.onstop = async () => {
-      // Stop visualizing audio
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
-        animationFrameId = null;
-      }
-      
-      // Stop microphone stream
-      if (microphoneStream) {
-        microphoneStream.getTracks().forEach(track => track.stop());
-        microphoneStream = null;
-      }
-      
       statusElement.textContent = 'Processing audio...';
+      statusElement.className = 'alert alert-info';
       
-      try {
-        // Create audio blob and convert to base64
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      // Create blob from audio chunks
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      audioChunks = [];
+      
+      // If not in streaming mode, send the complete audio to the API
+      if (!isStreaming) {
+        // Convert blob to base64
         const reader = new FileReader();
-        
-        reader.onload = async (e) => {
-          const base64Audio = e.target.result.split(',')[1];
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+          const base64Audio = reader.result.split(',')[1];
           await sendAudioToApi(base64Audio);
         };
-        
-        reader.readAsDataURL(audioBlob);
-      } catch (error) {
-        console.error('Error processing audio:', error);
-        statusElement.textContent = `Error: ${error.message}`;
-        statusElement.className = 'alert alert-danger';
       }
     };
     
     // Start recording
-    mediaRecorder.start();
+    mediaRecorder.start(1000); // Capture in 1-second chunks
     isRecording = true;
+    
+    // Update UI
     recordButton.textContent = 'Stop Recording';
     recordButton.classList.add('recording');
     statusElement.textContent = 'Recording... (click Stop when done)';
@@ -351,6 +512,66 @@ async function handleFileUpload() {
     statusElement.textContent = 'Please select an audio file first';
     statusElement.className = 'alert alert-warning';
     return;
+  }
+  
+  // Clear transcript before processing new file
+  transcriptElement.textContent = '';
+  confidenceElement.textContent = '';
+  
+  // If in streaming mode, we need to handle the file differently
+  if (isStreaming && webSocket && webSocket.readyState === WebSocket.OPEN) {
+    try {
+      const file = fileInput.files[0];
+      statusElement.textContent = 'Streaming file...';
+      statusElement.className = 'alert alert-info';
+      
+      // Get file information for better format handling
+      const fileType = file.type || 'audio/webm';
+      const fileName = file.name || 'audio.webm';
+      
+      logDebug(`Streaming file: ${fileName}, type: ${fileType}`);
+      
+      // Read file as base64
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64Audio = reader.result.split(',')[1];
+        
+        // Send to WebSocket server for streaming
+        webSocket.send(JSON.stringify({
+          type: 'start_stream',
+          api: currentApiVersion === 'groq' ? 'groq' : 'google',
+          apiKey: getApiKey(),
+          content: base64Audio,
+          model: getModel(),
+          languageCode: getLanguageCode(),
+          language: currentApiVersion === 'groq' ? groqLanguage.value : null,
+          prompt: currentApiVersion === 'groq' ? groqPrompt.value : null,
+          fileType: fileType,
+          fileName: fileName
+        }));
+        
+        logDebug('Sent file to WebSocket server for streaming transcription');
+      };
+      reader.readAsDataURL(file);
+      
+      // Add streaming styles if not already added
+      if (!document.getElementById('streaming-styles')) {
+        const styleEl = document.createElement('style');
+        styleEl.id = 'streaming-styles';
+        styleEl.textContent = `
+          .interim-transcript { color: gray; }
+          .final-transcript { color: black; }
+        `;
+        document.head.appendChild(styleEl);
+      }
+      
+      return; // Don't proceed with normal file upload
+    } catch (error) {
+      console.error('Error streaming file:', error);
+      statusElement.textContent = `Error: ${error.message}`;
+      statusElement.className = 'alert alert-danger';
+      return;
+    }
   }
   
   try {

@@ -1,12 +1,17 @@
 const express = require('express');
-const cors = require('cors');
+const http = require('http');
+const WebSocket = require('ws');
 const axios = require('axios');
+const bodyParser = require('body-parser');
+const cors = require('cors');
 const multer = require('multer');
-const { HttpsProxyAgent } = require('https-proxy-agent');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
 const { GoogleAuth } = require('google-auth-library');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 const dotenv = require('dotenv');
+const { Readable } = require('stream');
+const speech = require('@google-cloud/speech');
 
 // Load environment variables from .env and .env.local files
 // First load the default .env file
@@ -769,9 +774,360 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+// Create HTTP server
+const server = http.createServer(app);
+
+// Create WebSocket server
+const wss = new WebSocket.Server({ server });
+
+// Handle WebSocket connections
+wss.on('connection', (ws) => {
+  console.log('WebSocket client connected');
+  
+  // Handle messages from clients
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message);
+      console.log('Received WebSocket message type:', data.type);
+      
+      if (data.type === 'start_stream') {
+        // Handle stream start request
+        if (data.api === 'google') {
+          handleGoogleStreamingRequest(ws, data);
+        } else if (data.api === 'groq') {
+          handleGroqStreamingRequest(ws, data);
+        } else {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid API type' }));
+        }
+      }
+    } catch (error) {
+      console.error('WebSocket message error:', error);
+      ws.send(JSON.stringify({ type: 'error', message: error.message }));
+    }
+  });
+  
+  // Handle client disconnection
+  ws.on('close', () => {
+    console.log('WebSocket client disconnected');
+  });
+  
+  // Send initial connection confirmation
+  ws.send(JSON.stringify({ type: 'connected' }));
+});
+
+// Google Speech-to-Text streaming handler
+async function handleGoogleStreamingRequest(ws, data) {
+  try {
+    // Extract parameters from the request
+    const { apiKey, content, languageCode, model } = data;
+    
+    if (!apiKey) {
+      ws.send(JSON.stringify({ type: 'error', message: 'API key is required' }));
+      return;
+    }
+    
+    if (!content) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Audio content is required' }));
+      return;
+    }
+    
+    // Send acknowledgment to client
+    ws.send(JSON.stringify({ type: 'start', message: 'Starting Google streaming transcription' }));
+    
+    // Create a client with API key authentication
+    const client = new speech.SpeechClient({ 
+      credentials: { client_email: null, private_key: null },
+      projectId: 'placeholder-project',
+      authClient: new GoogleAuth().fromAPIKey(apiKey)
+    });
+    
+    // Create streaming recognize request
+    const request = {
+      config: {
+        encoding: 'WEBM_OPUS',
+        sampleRateHertz: 48000,
+        languageCode: languageCode || 'en-US',
+        model: model || 'default',
+        enableAutomaticPunctuation: true,
+        enableWordTimeOffsets: false,
+        useEnhanced: true,
+        maxAlternatives: 1,
+        profanityFilter: false,
+        speechContexts: [{
+          phrases: []
+        }],
+        enableWordConfidence: true,
+        enableSpokenPunctuation: true,
+        enableSpokenEmojis: true,
+      },
+      interimResults: true
+    };
+    
+    // Create a recognize stream
+    const recognizeStream = client
+      .streamingRecognize(request)
+      .on('error', (error) => {
+        console.error('Google Speech streaming error:', error);
+        ws.send(JSON.stringify({ type: 'error', message: `Streaming error: ${error.message}` }));
+      })
+      .on('data', (data) => {
+        // Send transcription results to client
+        const result = data.results[0];
+        const isFinal = result.isFinal;
+        const transcript = result.alternatives[0].transcript;
+        const confidence = result.alternatives[0].confidence;
+        
+        ws.send(JSON.stringify({
+          type: 'transcription',
+          isFinal,
+          transcript,
+          confidence
+        }));
+        
+        if (isFinal) {
+          console.log(`Final transcript: ${transcript}`);
+          console.log(`Confidence: ${confidence}`);
+        }
+      })
+      .on('end', () => {
+        console.log('Google Speech streaming ended');
+        ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended' }));
+      });
+    
+    // Convert base64 audio to buffer and send to recognize stream
+    const audioBuffer = Buffer.from(content, 'base64');
+    const audioStream = new Readable();
+    audioStream.push(audioBuffer);
+    audioStream.push(null);
+    audioStream.pipe(recognizeStream);
+    
+    console.log('Started Google Speech streaming transcription');
+  } catch (error) {
+    console.error('Google streaming handler error:', error);
+    ws.send(JSON.stringify({ type: 'error', message: error.message }));
+  }
+}
+
+// Groq Whisper streaming handler
+async function handleGroqStreamingRequest(ws, data) {
+  try {
+    // Extract parameters from the request
+    const { apiKey, content, model, language, prompt, fileType, fileName } = data;
+    
+    if (!apiKey) {
+      ws.send(JSON.stringify({ type: 'error', message: 'API key is required' }));
+      return;
+    }
+    
+    if (!content) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Audio content is required' }));
+      return;
+    }
+    
+    // Send acknowledgment to client
+    ws.send(JSON.stringify({ type: 'start', message: 'Starting Groq streaming transcription' }));
+    
+    // Groq API URL for transcriptions (not streaming specific)
+    const apiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions';
+    
+    // Create form data for the request
+    const FormData = require('form-data');
+    const form = new FormData();
+    
+    // Get the binary data from base64
+    const binaryData = Buffer.from(content, 'base64');
+    
+    // For Groq API, we'll use WAV format which is most widely supported
+    // First, determine what format we're dealing with
+    let detectedFormat = '';
+    
+    // Check for WAV header (RIFF)
+    if (binaryData.length >= 12 && 
+        binaryData.toString('ascii', 0, 4) === 'RIFF' && 
+        binaryData.toString('ascii', 8, 12) === 'WAVE') {
+      detectedFormat = 'wav';
+    }
+    // Check for MP3 header (ID3 or MPEG frame sync)
+    else if (binaryData.length >= 3 && 
+             (binaryData.toString('ascii', 0, 3) === 'ID3' || 
+              (binaryData[0] === 0xFF && (binaryData[1] & 0xE0) === 0xE0))) {
+      detectedFormat = 'mp3';
+    }
+    // Check for Ogg header (OggS)
+    else if (binaryData.length >= 4 && binaryData.toString('ascii', 0, 4) === 'OggS') {
+      detectedFormat = 'ogg';
+    }
+    // Check for FLAC header (fLaC)
+    else if (binaryData.length >= 4 && binaryData.toString('ascii', 0, 4) === 'fLaC') {
+      detectedFormat = 'flac';
+    }
+    // Default to mp3 for WebM or other formats
+    else {
+      detectedFormat = 'mp3';
+    }
+    
+    console.log(`Detected audio format: ${detectedFormat}`);
+    
+    // Create a temporary file with the appropriate extension
+    const tempFilePath = path.join(uploadsDir, `temp_${Date.now()}.${detectedFormat}`);
+    
+    // Write to temporary file
+    fs.writeFileSync(tempFilePath, binaryData);
+    
+    // For Groq API, we'll use a simple approach - just send the file directly
+    // This is more reliable than trying to convert formats on the fly
+    
+    // Add the audio file to the form with appropriate content type
+    form.append('file', fs.createReadStream(tempFilePath), {
+      filename: `audio.${detectedFormat}`,
+      contentType: `audio/${detectedFormat}`
+    });
+    
+    // Add model and other parameters
+    form.append('model', model || 'whisper-large-v3');
+    
+    // Add optional parameters if provided
+    if (language) {
+      form.append('language', language);
+    }
+    
+    if (prompt) {
+      form.append('prompt', prompt);
+    }
+    
+    // Set up headers with API key
+    const headers = {
+      'Authorization': `Bearer ${apiKey}`
+    };
+    
+    // Configure axios request
+    const axiosConfig = {
+      method: 'post',
+      url: apiUrl,
+      data: form,
+      headers: {
+        ...headers,
+        ...form.getHeaders()
+      },
+      responseType: 'stream',
+      validateStatus: false,
+      timeout: 60000,
+      proxy: false
+    };
+    
+    // Add proxy agent if enabled
+    if (useProxy && proxyAgent) {
+      axiosConfig.httpsAgent = proxyAgent;
+      console.log(`Using proxy for Groq streaming: ${proxyUrl}`);
+    }
+    
+    console.log('Starting Groq streaming request');
+    
+    // Make the request to Groq API
+    const response = await axios(axiosConfig);
+    
+    if (response.status !== 200) {
+      // Handle error response
+      let errorMessage = 'Groq API error';
+      const chunks = [];
+      
+      response.data.on('data', chunk => chunks.push(chunk));
+      response.data.on('end', () => {
+        try {
+          const errorData = JSON.parse(Buffer.concat(chunks).toString());
+          errorMessage = errorData.error?.message || `Error: ${response.status}`;
+        } catch (e) {
+          errorMessage = `Error: ${response.status}`;
+        }
+        
+        ws.send(JSON.stringify({ type: 'error', message: errorMessage }));
+        
+        // Clean up temp file
+        fs.unlink(tempFilePath, (err) => {
+          if (err) console.error('Error deleting temp file:', err);
+        });
+      });
+      
+      return;
+    }
+    
+    // Process streaming response
+    let buffer = '';
+    
+    response.data.on('data', (chunk) => {
+      const chunkStr = chunk.toString();
+      buffer += chunkStr;
+      
+      // Process complete JSON objects
+      let startIdx = 0;
+      let endIdx = buffer.indexOf('\n', startIdx);
+      
+      while (endIdx !== -1) {
+        const line = buffer.substring(startIdx, endIdx).trim();
+        startIdx = endIdx + 1;
+        
+        if (line.startsWith('data: ')) {
+          const jsonStr = line.substring(6).trim();
+          
+          if (jsonStr === '[DONE]') {
+            // End of stream
+            ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended' }));
+          } else {
+            try {
+              const data = JSON.parse(jsonStr);
+              
+              // Send partial transcription to client
+              ws.send(JSON.stringify({
+                type: 'transcription',
+                isFinal: false,
+                transcript: data.text || '',
+                confidence: data.confidence || 0
+              }));
+              
+            } catch (e) {
+              console.error('Error parsing Groq streaming response:', e);
+            }
+          }
+        }
+        
+        endIdx = buffer.indexOf('\n', startIdx);
+      }
+      
+      // Keep any remaining partial data
+      buffer = buffer.substring(startIdx);
+    });
+    
+    response.data.on('end', () => {
+      console.log('Groq streaming ended');
+      ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended' }));
+      
+      // Clean up temp file
+      fs.unlink(tempFilePath, (err) => {
+        if (err) console.error('Error deleting temp file:', err);
+      });
+    });
+    
+    response.data.on('error', (error) => {
+      console.error('Groq streaming error:', error);
+      ws.send(JSON.stringify({ type: 'error', message: `Streaming error: ${error.message}` }));
+      
+      // Clean up temp file
+      fs.unlink(tempFilePath, (err) => {
+        if (err) console.error('Error deleting temp file:', err);
+      });
+    });
+    
+  } catch (error) {
+    console.error('Groq streaming handler error:', error);
+    ws.send(JSON.stringify({ type: 'error', message: error.message }));
+  }
+}
+
+// Start the server
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`WebSocket server available at ws://localhost:${PORT}`);
   if (useProxy) {
     console.log(`Proxy enabled: ${proxyUrl}`);
   } else {

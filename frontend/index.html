@@ -252,26 +252,31 @@
         </div>
         
         <!-- Common Controls -->
-        <div class="mt-4">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <div>
-              <button id="record-button" class="btn btn-danger">Start Recording</button>
-              <button id="upload-button" class="btn btn-primary ms-2">Upload File</button>
+        <div class="row mb-3">
+          <div class="col-md-12 d-flex justify-content-center">
+            <button id="record-button" class="btn btn-primary me-2">Start Recording</button>
+            <button id="upload-button" class="btn btn-success me-2">Upload Audio</button>
+            <div class="form-check form-switch d-flex align-items-center ms-2">
+              <input class="form-check-input" type="checkbox" id="streaming-mode">
+              <label class="form-check-label ms-2" for="streaming-mode">Streaming Mode</label>
             </div>
+          </div>
+        </div>
+        
+        <div class="row mb-3">
+          <div class="col-md-12 d-flex justify-content-end">
             <div class="form-check">
               <input class="form-check-input" type="checkbox" id="debug-mode">
-              <label class="form-check-label" for="debug-mode">
-                Debug Mode
-              </label>
+              <label class="form-check-label" for="debug-mode">Debug Mode</label>
             </div>
           </div>
-          
-          <div class="audio-level">
-            <div class="audio-level-fill" id="audio-level-fill"></div>
-          </div>
-          
-          <div id="status" class="alert alert-info">Ready to record or upload audio</div>
         </div>
+        
+        <div class="audio-level mb-3">
+          <div class="audio-level-fill" id="audio-level-fill"></div>
+        </div>
+        
+        <div id="status" class="alert alert-info">Ready to record or upload audio</div>
       </div>
     </div>
     
