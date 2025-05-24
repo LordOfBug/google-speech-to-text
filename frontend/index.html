@@ -42,16 +42,20 @@
 </head>
 <body>
   <div class="container">
-    <h1 class="mb-4 text-center">Google Speech API Tester</h1>
+    <h1 class="mb-4 text-center">Speech Recognition API Tester</h1>
+    <p class="text-center mb-4">Test Google Speech-to-Text and Groq Whisper APIs</p>
     
     <div class="card mb-4">
       <div class="card-header">
         <ul class="nav nav-tabs card-header-tabs" id="api-tabs" role="tablist">
           <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="v1-tab" data-bs-toggle="tab" data-bs-target="#v1-content" type="button" role="tab" aria-controls="v1-content" aria-selected="true">V1 API</button>
+            <button class="nav-link active" id="v1-tab" data-bs-toggle="tab" data-bs-target="#v1-content" type="button" role="tab" aria-controls="v1-content" aria-selected="true">Google V1 API</button>
           </li>
           <li class="nav-item" role="presentation">
-            <button class="nav-link" id="v2-tab" data-bs-toggle="tab" data-bs-target="#v2-content" type="button" role="tab" aria-controls="v2-content" aria-selected="false">V2 API</button>
+            <button class="nav-link" id="v2-tab" data-bs-toggle="tab" data-bs-target="#v2-content" type="button" role="tab" aria-controls="v2-content" aria-selected="false">Google V2 API</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="groq-tab" data-bs-toggle="tab" data-bs-target="#groq-content" type="button" role="tab" aria-controls="groq-content" aria-selected="false">Groq API</button>
           </li>
         </ul>
       </div>
@@ -193,6 +197,30 @@
               <div class="col-md-6">
                 <label for="v2-file-upload" class="form-label">Upload Audio File (Optional)</label>
                 <input class="form-control" type="file" id="v2-file-upload" accept="audio/*">
+              </div>
+            </div>
+          </div>
+          
+          <!-- Groq API Tab -->
+          <div class="tab-pane fade" id="groq-content" role="tabpanel" aria-labelledby="groq-tab">
+            <div class="row mb-3">
+              <div class="col-md-6">
+                <label for="groq-api-key" class="form-label">Groq API Key</label>
+                <input type="password" class="form-control" id="groq-api-key" placeholder="Enter your Groq API Key">
+              </div>
+              <div class="col-md-6">
+                <label for="groq-model" class="form-label">Model</label>
+                <select class="form-select" id="groq-model">
+                  <option value="whisper-large-v3">Whisper Large v3</option>
+                  <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo</option>
+                  <option value="distil-whisper">Distil Whisper</option>
+                </select>
+              </div>
+            </div>
+            <div class="row mb-3">
+              <div class="col-md-6">
+                <label for="groq-file-upload" class="form-label">Upload Audio File (Optional)</label>
+                <input class="form-control" type="file" id="groq-file-upload" accept="audio/*">
               </div>
             </div>
           </div>

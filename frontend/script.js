@@ -12,6 +12,7 @@ const audioLevelFill = document.getElementById('audio-level-fill');
 // API Version Tabs
 const v1Tab = document.getElementById('v1-tab');
 const v2Tab = document.getElementById('v2-tab');
+const groqTab = document.getElementById('groq-tab');
 
 // API Inputs
 const v1ApiKey = document.getElementById('v1-api-key');
@@ -26,6 +27,11 @@ const v2ServiceAccount = document.getElementById('v2-service-account');
 const v2LanguageCheckboxes = document.querySelectorAll('.v2-language-checkbox');
 const v2Model = document.getElementById('v2-model');
 const v2FileUpload = document.getElementById('v2-file-upload');
+
+// Groq API Inputs
+const groqApiKey = document.getElementById('groq-api-key');
+const groqModel = document.getElementById('groq-model');
+const groqFileUpload = document.getElementById('groq-file-upload');
 
 // Service account data
 let serviceAccountData = null;
@@ -47,11 +53,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const savedV2Key = localStorage.getItem('v2ApiKey');
   const savedV2ProjectId = localStorage.getItem('v2ProjectId');
   const savedV2Region = localStorage.getItem('v2Region');
+  const savedGroqKey = localStorage.getItem('groqApiKey');
   
   if (savedV1Key) v1ApiKey.value = savedV1Key;
   if (savedV2Key) v2ApiKey.value = savedV2Key;
   if (savedV2ProjectId) v2ProjectId.value = savedV2ProjectId;
   if (savedV2Region) v2Region.value = savedV2Region;
+  if (savedGroqKey) groqApiKey.value = savedGroqKey;
   
   // Load saved language selections for V2
   const savedV2Languages = localStorage.getItem('v2SelectedLanguages');
@@ -78,6 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // API version tab switching
   v1Tab.addEventListener('click', () => setApiVersion('v1'));
   v2Tab.addEventListener('click', () => setApiVersion('v2'));
+  groqTab.addEventListener('click', () => setApiVersion('groq'));
   
   // Service account file upload
   v2ServiceAccount.addEventListener('change', handleServiceAccountUpload);
@@ -138,17 +147,34 @@ function setApiVersion(version) {
     v1Tab.setAttribute('aria-selected', 'true');
     v2Tab.classList.remove('active');
     v2Tab.setAttribute('aria-selected', 'false');
+    groqTab.classList.remove('active');
+    groqTab.setAttribute('aria-selected', 'false');
     
     document.getElementById('v1-content').classList.add('show', 'active');
     document.getElementById('v2-content').classList.remove('show', 'active');
-  } else {
+    document.getElementById('groq-content').classList.remove('show', 'active');
+  } else if (version === 'v2') {
     v2Tab.classList.add('active');
     v2Tab.setAttribute('aria-selected', 'true');
     v1Tab.classList.remove('active');
     v1Tab.setAttribute('aria-selected', 'false');
+    groqTab.classList.remove('active');
+    groqTab.setAttribute('aria-selected', 'false');
     
     document.getElementById('v2-content').classList.add('show', 'active');
     document.getElementById('v1-content').classList.remove('show', 'active');
+    document.getElementById('groq-content').classList.remove('show', 'active');
+  } else if (version === 'groq') {
+    groqTab.classList.add('active');
+    groqTab.setAttribute('aria-selected', 'true');
+    v1Tab.classList.remove('active');
+    v1Tab.setAttribute('aria-selected', 'false');
+    v2Tab.classList.remove('active');
+    v2Tab.setAttribute('aria-selected', 'false');
+    
+    document.getElementById('groq-content').classList.add('show', 'active');
+    document.getElementById('v1-content').classList.remove('show', 'active');
+    document.getElementById('v2-content').classList.remove('show', 'active');
   }
 }
 
@@ -314,7 +340,10 @@ function visualizeAudio() {
 
 // Handle file upload
 async function handleFileUpload() {
-  const fileInput = currentApiVersion === 'v1' ? v1FileUpload : v2FileUpload;
+  let fileInput;
+  if (currentApiVersion === 'v1') fileInput = v1FileUpload;
+  else if (currentApiVersion === 'v2') fileInput = v2FileUpload;
+  else if (currentApiVersion === 'groq') fileInput = groqFileUpload;
   
   if (!fileInput.files.length) {
     statusElement.textContent = 'Please select an audio file first';
@@ -338,8 +367,18 @@ async function handleFileUpload() {
     // Create form data
     const formData = new FormData();
     formData.append('audio', file);
-    // For V1, add language code directly
-    if (currentApiVersion === 'v1') {
+    
+    if (currentApiVersion === 'groq') {
+      // For Groq API
+      formData.append('model', getModel());
+      formData.append('apiKey', getApiKey());
+      
+      logDebug('Preparing Groq file upload', {
+        model: getModel(),
+        fileName: file.name
+      });
+    } else if (currentApiVersion === 'v1') {
+      // For V1, add language code directly
       formData.append('languageCode', getLanguageCode());
     } else {
       // For V2, we need to create a properly structured request
@@ -363,7 +402,7 @@ async function handleFileUpload() {
       };
       
       // Log the languages being used
-      if (selectedLanguages.length > 1 && (getModel() === 'chirp' || getModel() === 'chirp_2')) {
+      if (selectedLanguages.length > 1 && (getModel() === 'chirp' || getModel() === 'chirp_2' || getModel() === 'chirp_3')) {
         logDebug('Using multiple languages with Chirp for file upload', { 
           languages: selectedLanguages 
         });
@@ -394,16 +433,27 @@ async function handleFileUpload() {
     // Save API key to localStorage
     if (currentApiVersion === 'v1') {
       localStorage.setItem('v1ApiKey', apiKey);
-    } else {
+    } else if (currentApiVersion === 'v2') {
       localStorage.setItem('v2ApiKey', apiKey);
+    } else if (currentApiVersion === 'groq') {
+      localStorage.setItem('groqApiKey', apiKey);
     }
     
     // Create URL with API key
-    let uploadUrl = `/api/speech/${currentApiVersion}/upload?key=${encodeURIComponent(apiKey)}`;
+    let uploadUrl;
     
-    // Add project ID and region for V2 API
-    if (currentApiVersion === 'v2') {
-      uploadUrl += `&project=${encodeURIComponent(v2ProjectId.value)}&region=${encodeURIComponent(v2Region.value)}`;
+    if (currentApiVersion === 'groq') {
+      // For Groq API
+      uploadUrl = `/api/groq/speech/upload`;
+      // API key is already in the form data
+    } else {
+      // For Google Speech API (v1 or v2)
+      uploadUrl = `/api/speech/${currentApiVersion}/upload?key=${encodeURIComponent(apiKey)}`;
+      
+      // Add project ID and region for V2 API
+      if (currentApiVersion === 'v2') {
+        uploadUrl += `&project=${encodeURIComponent(v2ProjectId.value)}&region=${encodeURIComponent(v2Region.value)}`;
+      }
     }
     
     logDebug('Uploading file', { url: uploadUrl });
@@ -438,56 +488,70 @@ async function handleFileUpload() {
 // Send audio to API
 async function sendAudioToApi(base64Audio) {
   try {
-    statusElement.textContent = 'Sending to Google Speech API...';
+    statusElement.textContent = 'Processing audio...';
+    statusElement.className = 'alert alert-info';
     
-    // Get API key
     const apiKey = getApiKey();
     if (!apiKey) {
-      throw new Error('API key is required');
+      statusElement.textContent = 'API key is required';
+      statusElement.className = 'alert alert-danger';
+      return;
     }
     
-    // Create request body based on API version
-    let requestBody;
-    if (currentApiVersion === 'v1') {
+    let endpoint, requestBody;
+    
+    if (currentApiVersion === 'groq') {
+      // For Groq API
+      endpoint = '/api/groq/speech';
       requestBody = {
+        apiKey: apiKey,
         model: getModel(),
-        audio: {
-          content: base64Audio
-        }
-      };
-      requestBody.languageCode = getLanguageCode();
-    } else {
-      // For V2 API, the request structure is different
-      const projectId = v2ProjectId.value;
-      const region = v2Region.value;
-      
-      // For Chirp model with multiple languages, we can specify all expected languages
-      const languages = getSelectedLanguages();
-      
-      requestBody = {
-        recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
-        config: {
-          // Include all selected languages for Chirp 2
-          language_codes: languages,
-          model: getModel(),
-          features: {
-            enable_automatic_punctuation: true
-          },
-          auto_decoding_config: {}
-        },
         content: base64Audio
       };
+    } else {
+      // For Google Speech API (v1 or v2)
+      endpoint = `/api/speech/${currentApiVersion}`;
       
-      // Log the languages being used
-      if (languages.length > 1 && (getModel() === 'chirp' || getModel() === 'chirp_2')) {
-        logDebug('Using multiple languages with Chirp', { languages });
+      if (currentApiVersion === 'v1') {
+        // For V1 API, the request structure is simple
+        requestBody = {
+          languageCode: getLanguageCode(),
+          model: getModel(),
+          content: base64Audio
+        };
+      } else {
+        // For V2 API, the request structure is different
+        const projectId = v2ProjectId.value;
+        const region = v2Region.value;
+        
+        // For Chirp model with multiple languages, we can specify all expected languages
+        const languages = getSelectedLanguages();
+        
+        requestBody = {
+          recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
+          config: {
+            // Include all selected languages for Chirp 2
+            language_codes: languages,
+            model: getModel(),
+            features: {
+              enable_automatic_punctuation: true
+            },
+            auto_decoding_config: {}
+          },
+          content: base64Audio
+        };
+        
+        // Log the languages being used
+        if (languages.length > 1 && (getModel() === 'chirp' || getModel() === 'chirp_2' || getModel() === 'chirp_3')) {
+          logDebug('Using multiple languages with Chirp', { languages });
+        }
       }
     }
     
     // Save API key to localStorage
     if (currentApiVersion === 'v1') {
       localStorage.setItem('v1ApiKey', apiKey);
-    } else {
+    } else if (currentApiVersion === 'v2') {
       localStorage.setItem('v2ApiKey', apiKey);
       localStorage.setItem('v2ProjectId', v2ProjectId.value);
       localStorage.setItem('v2Region', v2Region.value);
@@ -495,6 +559,8 @@ async function sendAudioToApi(base64Audio) {
       // Save selected languages
       const selectedLanguages = getSelectedLanguages();
       localStorage.setItem('v2SelectedLanguages', JSON.stringify(selectedLanguages));
+    } else if (currentApiVersion === 'groq') {
+      localStorage.setItem('groqApiKey', apiKey);
     }
     
     logDebug('Sending request to API', { 
@@ -507,13 +573,22 @@ async function sendAudioToApi(base64Audio) {
     });
     
     // Send request to our proxy server
-    let apiUrl = `/api/speech/${currentApiVersion}?key=${encodeURIComponent(apiKey)}`;
+    let apiUrl;
     
-    // Add project ID and region to URL for V2 API
-    if (currentApiVersion === 'v2') {
-      const projectId = v2ProjectId.value;
-      const region = v2Region.value;
-      apiUrl += `&project=${projectId}&region=${region}`;
+    if (currentApiVersion === 'groq') {
+      // For Groq API
+      apiUrl = '/api/groq/speech';
+      // API key is already in the request body
+    } else {
+      // For Google Speech API (v1 or v2)
+      apiUrl = `/api/speech/${currentApiVersion}?key=${encodeURIComponent(apiKey)}`;
+      
+      // Add project ID and region to URL for V2 API
+      if (currentApiVersion === 'v2') {
+        const projectId = v2ProjectId.value;
+        const region = v2Region.value;
+        apiUrl += `&project=${projectId}&region=${region}`;
+      }
     }
     
     // Create headers
@@ -558,7 +633,22 @@ async function sendAudioToApi(base64Audio) {
 
 // Process API results
 function processResults(data) {
-  if (currentApiVersion === 'v1') {
+  if (currentApiVersion === 'groq') {
+    // Process Groq API response
+    if (data.text) {
+      transcriptElement.textContent = data.text;
+      
+      // Extract confidence if available
+      if (data.confidence !== undefined) {
+        confidenceElement.textContent = `Confidence: ${(data.confidence * 100).toFixed(2)}%`;
+      } else {
+        confidenceElement.textContent = '';
+      }
+    } else {
+      transcriptElement.textContent = 'No transcription available';
+      confidenceElement.textContent = '';
+    }
+  } else if (currentApiVersion === 'v1') {
     // Process V1 API response
     if (data.results && data.results.length > 0) {
       const result = data.results[0];
@@ -605,7 +695,10 @@ function processResults(data) {
 
 // Helper functions
 function getApiKey() {
-  return currentApiVersion === 'v1' ? v1ApiKey.value : v2ApiKey.value;
+  if (currentApiVersion === 'v1') return v1ApiKey.value;
+  if (currentApiVersion === 'v2') return v2ApiKey.value;
+  if (currentApiVersion === 'groq') return groqApiKey.value;
+  return '';
 }
 
 function getLanguageCode() {
@@ -629,5 +722,8 @@ function getSelectedLanguages() {
 }
 
 function getModel() {
-  return currentApiVersion === 'v1' ? v1Model.value : v2Model.value;
+  if (currentApiVersion === 'v1') return v1Model.value;
+  if (currentApiVersion === 'v2') return v2Model.value;
+  if (currentApiVersion === 'groq') return groqModel.value;
+  return '';
 }

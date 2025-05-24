@@ -32,6 +32,102 @@ const proxyAgent = new HttpsProxyAgent(proxyUrl);
 // Serve static files from the frontend directory
 app.use(express.static(path.join(__dirname, '../frontend')));
 
+// Groq API endpoint for speech recognition
+app.post('/api/groq/speech', async (req, res) => {
+  try {
+    const apiKey = req.query.key || req.body.apiKey;
+    if (!apiKey) {
+      return res.status(400).json({
+        error: { code: 400, message: 'Groq API key is required' }
+      });
+    }
+    
+    // Extract model and audio content
+    const model = req.body.model || 'whisper-large-v3';
+    const content = req.body.content;
+    
+    if (!content) {
+      return res.status(400).json({
+        error: { code: 400, message: 'Audio content is required' }
+      });
+    }
+    
+    // Groq API URL
+    const apiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions';
+    
+    // Set up headers with API key
+    const headers = {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'multipart/form-data'
+    };
+    
+    // Create form data for the request
+    const formData = new FormData();
+    
+    // Convert base64 to blob
+    const binaryData = Buffer.from(content, 'base64');
+    const blob = new Blob([binaryData]);
+    
+    // Add form data fields
+    formData.append('file', blob, 'audio.webm');
+    formData.append('model', model);
+    
+    // Log request details (with truncated content)
+    console.log('Request URL:', apiUrl);
+    
+    // Create a copy of headers for logging with truncated Authorization
+    const logHeaders = { ...headers };
+    if (logHeaders.Authorization) {
+      logHeaders.Authorization = `${logHeaders.Authorization.substring(0, 25)}...`;
+    }
+    console.log('Request headers:', JSON.stringify(logHeaders, null, 2));
+    console.log('Request body structure:', JSON.stringify({
+      model: model,
+      file: '[AUDIO_FILE_CONTENT]'
+    }, null, 2));
+    
+    // Forward the request to Groq's API
+    const response = await axios({
+      method: 'post',
+      url: apiUrl,
+      data: formData,
+      headers: headers,
+      httpsAgent: proxyAgent,
+      validateStatus: false,
+      timeout: 30000,
+      proxy: false
+    });
+    
+    console.log(`Response status: ${response.status}`);
+    if (response.status !== 200) {
+      console.log('Error response:', response.data);
+    } else {
+      // For successful responses, print recognition results in plain text
+      if (response.data && response.data.text) {
+        const transcript = response.data.text;
+        // Groq doesn't provide confidence scores directly, so we'll mark it as N/A
+        console.log(`Recognition result (confidence=N/A):`, transcript);
+      } else {
+        console.log('Recognition RAW result:', response.data);
+      }
+    }
+    
+    // Forward the response exactly as-is back to the client
+    res.status(response.status).send(response.data);
+    
+  } catch (error) {
+    console.error('Groq proxy error:', error.message);
+    console.error('Error stack:', error.stack);
+    
+    res.status(500).json({
+      error: {
+        code: 500,
+        message: `Groq proxy error: ${error.message}`
+      }
+    });
+  }
+});
+
 // Simple proxy endpoint for Speech-to-Text API (both V1 and V2)
 app.post('/api/speech/:version', async (req, res) => {
   try {
@@ -457,6 +553,116 @@ app.post('/api/speech/:version/upload', upload.single('audio'), async (req, res)
       error: {
         code: 500,
         message: `Proxy error: ${error.message}`
+      }
+    });
+  }
+});
+
+// Groq API endpoint for speech recognition (file upload)
+app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => {
+  try {
+    const apiKey = req.query.key || req.body.apiKey;
+    if (!apiKey) {
+      return res.status(400).json({
+        error: { code: 400, message: 'Groq API key is required' }
+      });
+    }
+    
+    if (!req.file) {
+      return res.status(400).json({ 
+        error: { code: 400, message: 'No audio file uploaded' } 
+      });
+    }
+    
+    // Extract model
+    const model = req.body.model || 'whisper-large-v3';
+    
+    // Groq API URL
+    const apiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions';
+    
+    // Set up headers with API key
+    const headers = {
+      'Authorization': `Bearer ${apiKey}`
+      // Content-Type will be set by form-data
+    };
+    
+    // Create form data for the request
+    const FormData = require('form-data');
+    const form = new FormData();
+    
+    // Add the audio file
+    form.append('file', fs.createReadStream(req.file.path), {
+      filename: req.file.originalname || 'audio.webm',
+      contentType: req.file.mimetype || 'audio/webm'
+    });
+    form.append('model', model);
+    
+    // Log request details
+    console.log('File upload request URL:', apiUrl);
+    
+    // Create a copy of headers for logging with truncated Authorization
+    const logHeaders = { ...headers };
+    if (logHeaders.Authorization) {
+      logHeaders.Authorization = `${logHeaders.Authorization.substring(0, 25)}...`;
+    }
+    console.log('File upload request headers:', JSON.stringify(logHeaders, null, 2));
+    console.log('File upload request body structure:', JSON.stringify({
+      model: model,
+      file: '[AUDIO_FILE_CONTENT]'
+    }, null, 2));
+    
+    // Forward the request to Groq's API
+    const response = await axios({
+      method: 'post',
+      url: apiUrl,
+      data: form,
+      headers: {
+        ...headers,
+        ...form.getHeaders()
+      },
+      httpsAgent: proxyAgent,
+      validateStatus: false,
+      timeout: 30000,
+      proxy: false
+    });
+    
+    console.log(`Response status: ${response.status}`);
+    if (response.status !== 200) {
+      console.log('Error response:', response.data);
+    } else {
+      // For successful responses, print recognition results in plain text
+      if (response.data && response.data.text) {
+        const transcript = response.data.text;
+        // Groq doesn't provide confidence scores directly, so we'll mark it as N/A
+        console.log(`Recognition result (confidence=N/A):`, transcript);
+      } else {
+        console.log('Recognition RAW result:', response.data);
+      }
+    }
+    
+    // Forward the response exactly as-is back to the client
+    res.status(response.status).send(response.data);
+    
+    // Delete the temporary file if it exists
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+      console.log(`Deleted temporary file: ${req.file.path}`);
+    }
+    
+  } catch (error) {
+    console.error('Groq proxy error:', error.message);
+    console.error('Error stack:', error.stack);
+    
+    // Delete the temporary file if it exists
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+      console.log(`Deleted temporary file: ${req.file.path}`);
+    }
+    
+    res.status(500).json({
+      error: {
+        code: 500,
+        message: `Groq proxy error: ${error.message}`
       }
     });
   }
