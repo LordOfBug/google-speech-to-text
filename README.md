@@ -1,6 +1,6 @@
-# Google Speech-to-Text API Testing Project
+# Speech-to-Text API Testing Project
 
-This project provides a simple way to test both V1 and V2 versions of the Google Cloud Speech-to-Text API through a local proxy server.
+This project provides a simple way to test both V1 and V2 versions of the Cloud Speech-to-Text API through a local proxy server.
 
 ## Features
 
