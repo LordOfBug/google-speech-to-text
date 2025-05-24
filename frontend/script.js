@@ -34,6 +34,7 @@ let audioContext = null;
 let analyser = null;
 let microphoneStream = null;
 let currentApiVersion = 'v1';
+let isCurrentlyProcessingStream = false;
 
 // WebSocket and streaming state
 let webSocket = null;
@@ -285,15 +286,26 @@ function toggleGoogleApiVersion() {
   logDebug(`Switched to Google ${currentApiVersion} API`);
 }
 
+// Track if we're currently processing a stream to prevent duplicates
+let pendingStreamData = null;
+
 // Connect to WebSocket server
 function connectWebSocket() {
+  // If we already have an open connection, don't create another one
   if (webSocket && webSocket.readyState === WebSocket.OPEN) {
     logDebug('WebSocket already connected');
     return;
   }
   
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}`;
+  // If we have a connection that's closing, wait for it to close before creating a new one
+  if (webSocket && webSocket.readyState === WebSocket.CLOSING) {
+    logDebug('WebSocket is closing, waiting before reconnecting...');
+    setTimeout(connectWebSocket, 500);
+    return;
+  }
+  
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}`;
   
   logDebug(`Connecting to WebSocket server at ${wsUrl}`);
   
@@ -301,24 +313,81 @@ function connectWebSocket() {
   
   webSocket.onopen = () => {
     logDebug('WebSocket connection established');
+    
+    // If we have pending stream data, send it now
+    if (pendingStreamData) {
+      logDebug('Sending pending stream data');
+      webSocket.send(JSON.stringify(pendingStreamData));
+      pendingStreamData = null;
+    }
   };
   
   webSocket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      logDebug('WebSocket message received', data);
+      
+      // Enhanced logging for all messages
+      if (data.type === 'transcription') {
+        // For transcription messages, log with sequence information
+        logDebug(`WebSocket message #${data.sequence || 'N/A'} received`, {
+          type: data.type,
+          isFinal: data.isFinal,
+          sequence: data.sequence,
+          transcript: data.transcript,
+          confidence: data.confidence,
+          stability: data.stability,
+          alternativesCount: data.alternativesCount,
+          resultEndTime: data.resultEndTime
+        });
+      } else {
+        // For other message types
+        logDebug('WebSocket message received', data);
+      }
       
       if (data.type === 'connected') {
         logDebug('WebSocket connection confirmed');
+      } else if (data.type === 'start') {
+        // Mark that we're currently processing a stream
+        isCurrentlyProcessingStream = true;
+        
+        // Show processing status when streaming starts
+        statusElement.textContent = 'Processing audio...';
+        statusElement.className = 'alert alert-info';
+        // Clear any previous interim results
+        interimResultsElement.textContent = '';
+        interimResultsElement.style.display = 'none';
       } else if (data.type === 'transcription') {
+        // Keep the "Processing audio..." status while showing interim results
+        if (statusElement.textContent !== 'Processing audio...') {
+          statusElement.textContent = 'Processing audio...';
+          statusElement.className = 'alert alert-info';
+        }
+        
+        // Display sequence and final/interim status in the status area
+        const statusInfo = `Processing audio... [Seq: ${data.sequence}, ${data.isFinal ? 'Final' : 'Interim'}]`;
+        statusElement.textContent = statusInfo;
+        
         // Update transcript with streaming results
         updateStreamingTranscript(data);
       } else if (data.type === 'error') {
         console.error('WebSocket error:', data.message);
         statusElement.textContent = `Error: ${data.message}`;
         statusElement.className = 'alert alert-danger';
+        // Hide interim results on error
+        interimResultsElement.style.display = 'none';
+        
+        // Mark that we're no longer processing a stream
+        isCurrentlyProcessingStream = false;
       } else if (data.type === 'end') {
         logDebug('Streaming ended');
+        // Update status when streaming ends
+        statusElement.textContent = 'Transcription complete';
+        statusElement.className = 'alert alert-success';
+        // Hide interim results when streaming ends
+        interimResultsElement.style.display = 'none';
+        
+        // Mark that we're no longer processing a stream
+        isCurrentlyProcessingStream = false;
       }
     } catch (error) {
       console.error('Error parsing WebSocket message:', error);
@@ -344,22 +413,132 @@ function connectWebSocket() {
   };
 }
 
+// Get the interim results element
+const interimResultsElement = document.getElementById('interim-results');
+
+// Store recent final transcripts to handle Google's repeated segments
+const recentFinalTranscripts = [];
+const MAX_RECENT_TRANSCRIPTS = 5;
+let fullTranscript = '';
+
 // Update transcript with streaming results
 function updateStreamingTranscript(data) {
   const { transcript, isFinal, confidence } = data;
   
   if (isFinal) {
-    // Final result - update transcript and confidence
-    transcriptElement.textContent = transcript;
+    // Final result - process and update main transcript
+    if (transcript.trim()) {
+      // Process the final transcript to avoid duplicates and handle overlaps
+      const processedResult = processFinalTranscript(transcript);
+      
+      if (processedResult.isNew) {
+        // Update the full transcript with the processed content
+        fullTranscript = processedResult.updatedTranscript;
+        transcriptElement.textContent = fullTranscript;
+        
+        // Log the new transcript for debugging
+        logDebug('Transcript updated', { 
+          new: processedResult.newContent,
+          full: fullTranscript 
+        });
+      } else {
+        // This was a duplicate or fully overlapping content - skipped
+        logDebug('Skipped duplicate segment', { transcript });
+      }
+    }
+    
+    // Update confidence if available
     if (confidence) {
       confidenceElement.textContent = `Confidence: ${(confidence * 100).toFixed(2)}%`;
     }
+    
+    // Clear the interim transcript when we get a final result
     streamingInterimTranscript = '';
+    interimResultsElement.style.display = 'none';
   } else {
-    // Interim result - show in transcript with styling
+    // Interim result - show in the dedicated interim results area
     streamingInterimTranscript = transcript;
-    transcriptElement.innerHTML = `<span class="final-transcript">${transcriptElement.textContent}</span> <span class="interim-transcript">${streamingInterimTranscript}</span>`;
+    
+    // Show the interim results element if it's hidden
+    if (interimResultsElement.style.display === 'none') {
+      interimResultsElement.style.display = 'block';
+    }
+    
+    // Update the interim results content
+    interimResultsElement.textContent = streamingInterimTranscript;
   }
+}
+
+// Process a final transcript to handle duplicates and overlaps
+function processFinalTranscript(newTranscript) {
+  // Check if this exact transcript was recently processed
+  if (recentFinalTranscripts.includes(newTranscript)) {
+    return { isNew: false };
+  }
+  
+  // Add to recent transcripts and maintain the max length
+  recentFinalTranscripts.push(newTranscript);
+  if (recentFinalTranscripts.length > MAX_RECENT_TRANSCRIPTS) {
+    recentFinalTranscripts.shift();
+  }
+  
+  // If this is the first transcript, just use it directly
+  if (!fullTranscript) {
+    return { 
+      isNew: true, 
+      updatedTranscript: newTranscript,
+      newContent: newTranscript 
+    };
+  }
+  
+  // Check if the new transcript is entirely contained within the full transcript
+  if (fullTranscript.includes(newTranscript)) {
+    return { isNew: false };
+  }
+  
+  // Check if the new transcript contains the full transcript
+  if (newTranscript.includes(fullTranscript)) {
+    // The new transcript is a superset of what we have, so replace everything
+    return { 
+      isNew: true, 
+      updatedTranscript: newTranscript,
+      newContent: newTranscript.replace(fullTranscript, '') 
+    };
+  }
+  
+  // Look for significant overlap at the end of the full transcript
+  const maxOverlapLength = Math.min(fullTranscript.length, newTranscript.length) - 1;
+  let overlapLength = 0;
+  
+  for (let i = 1; i <= maxOverlapLength; i++) {
+    const endOfFull = fullTranscript.slice(-i);
+    const startOfNew = newTranscript.slice(0, i);
+    
+    if (endOfFull === startOfNew) {
+      overlapLength = i;
+    }
+  }
+  
+  // If we found significant overlap, append only the non-overlapping part
+  if (overlapLength > 0) {
+    const nonOverlappingPart = newTranscript.slice(overlapLength);
+    if (nonOverlappingPart.trim()) {
+      return { 
+        isNew: true, 
+        updatedTranscript: fullTranscript + nonOverlappingPart,
+        newContent: nonOverlappingPart 
+      };
+    } else {
+      return { isNew: false };
+    }
+  }
+  
+  // No significant overlap found, append with a space
+  return { 
+    isNew: true, 
+    updatedTranscript: fullTranscript + ' ' + newTranscript,
+    newContent: newTranscript 
+  };
 }
 
 // Log debug information
@@ -448,7 +627,9 @@ async function startRecording() {
           
           // For Google API, send each chunk immediately
           // For Groq API, collect chunks and send less frequently
-          if (api === 'google' || (api === 'groq' && now - lastSentTime >= MIN_CHUNK_INTERVAL)) {
+          // Only send if we're not currently processing a stream
+          if (!isCurrentlyProcessingStream && 
+              (api === 'google' || (api === 'groq' && now - lastSentTime >= MIN_CHUNK_INTERVAL))) {
             // Create a combined blob from all chunks
             const audioBlob = new Blob(streamingChunks, { type: mediaRecorder.mimeType });
             
@@ -592,6 +773,10 @@ async function handleFileUpload() {
   // Clear transcript before processing new file
   transcriptElement.textContent = '';
   confidenceElement.textContent = '';
+  
+  // Clear any previous interim results
+  interimResultsElement.textContent = '';
+  interimResultsElement.style.display = 'none';
   
   // If in streaming mode, we need to handle the file differently
   if (isStreaming && webSocket && webSocket.readyState === WebSocket.OPEN) {

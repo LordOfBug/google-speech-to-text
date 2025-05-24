@@ -929,6 +929,13 @@ async function handleGoogleStreamingRequest(ws, data) {
       console.log(`Using Google V2 API with model: ${model || 'default'}`);
     }
     
+    // Add a response counter to track the sequence of responses
+    let responseCounter = 0;
+    
+    // Track the last transcript to prevent duplicates
+    let lastTranscript = '';
+    let lastFinalTranscript = '';
+    
     const request = {
       config: requestConfig,
       interimResults: true
@@ -942,22 +949,63 @@ async function handleGoogleStreamingRequest(ws, data) {
         ws.send(JSON.stringify({ type: 'error', message: `Streaming error: ${error.message}` }));
       })
       .on('data', (data) => {
-        // Send transcription results to client
-        const result = data.results[0];
-        const isFinal = result.isFinal;
-        const transcript = result.alternatives[0].transcript;
-        const confidence = result.alternatives[0].confidence;
+        // Increment the response counter
+        responseCounter++;
         
-        ws.send(JSON.stringify({
-          type: 'transcription',
-          isFinal,
-          transcript,
-          confidence
-        }));
-        
-        if (isFinal) {
-          console.log(`Final transcript: ${transcript}`);
-          console.log(`Confidence: ${confidence}`);
+        // Process the response if it contains results
+        if (data.results && data.results.length > 0) {
+          const result = data.results[0];
+          const isFinal = result.isFinal;
+          const transcript = result.alternatives[0].transcript;
+          const confidence = result.alternatives[0].confidence || 0;
+          
+          // Check for duplicate or empty transcripts
+          const isDuplicate = transcript === lastTranscript;
+          const isFinalDuplicate = isFinal && transcript === lastFinalTranscript;
+          
+          // Log detailed information about the response
+          console.log(`[${apiVersion}] Stream Response #${responseCounter}:`, {
+            resultCount: data.results.length,
+            isFinal: isFinal,
+            transcript: transcript,
+            confidence: confidence,
+            stability: result.stability || 'N/A',
+            resultEndTime: result.resultEndTime || 'N/A',
+            languageCode: result.languageCode || 'N/A',
+            alternativesCount: result.alternatives.length,
+            isDuplicate: isDuplicate,
+            isFinalDuplicate: isFinalDuplicate
+          });
+          
+          // Only send non-duplicate responses to the client
+          // For interim results, we allow the same transcript to be sent if it's not consecutive
+          // For final results, we're more strict to avoid duplicates
+          if (!isDuplicate || (isFinal && !isFinalDuplicate)) {
+            // Send transcription results to client with sequence number and additional data
+            ws.send(JSON.stringify({
+              type: 'transcription',
+              sequence: responseCounter,
+              isFinal,
+              transcript,
+              confidence: confidence,
+              stability: result.stability || null,
+              resultEndTime: result.resultEndTime || null,
+              alternativesCount: result.alternatives.length,
+              isDuplicate: isDuplicate
+            }));
+            
+            // Update tracking variables
+            lastTranscript = transcript;
+            if (isFinal) {
+              lastFinalTranscript = transcript;
+              console.log(`Final transcript: ${transcript}`);
+              console.log(`Confidence: ${confidence}`);
+            }
+          } else {
+            console.log(`Skipping duplicate transcript: "${transcript}"`);
+          }
+        } else {
+          console.log(`[${apiVersion}] Stream Response #${responseCounter}: No results in response`);
         }
       })
       .on('end', () => {
