@@ -6,6 +6,21 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const fs = require('fs');
 const path = require('path');
 const { GoogleAuth } = require('google-auth-library');
+const dotenv = require('dotenv');
+
+// Load environment variables from .env and .env.local files
+// First load the default .env file
+dotenv.config();
+
+// Then load .env.local if it exists (will override values from .env)
+const envLocalPath = path.resolve(__dirname, '.env.local');
+if (fs.existsSync(envLocalPath)) {
+  const envLocalConfig = dotenv.parse(fs.readFileSync(envLocalPath));
+  for (const k in envLocalConfig) {
+    process.env[k] = envLocalConfig[k];
+  }
+  console.log('Loaded environment variables from .env.local');
+}
 
 // Define uploads directory with absolute path
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -26,8 +41,22 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // Configure proxy agent for requests behind firewall
-const proxyUrl = 'http://127.0.0.1:8888';
-const proxyAgent = new HttpsProxyAgent(proxyUrl);
+const useProxy = process.env.USE_PROXY === 'true';
+const proxyUrl = process.env.PROXY_URL || 'http://127.0.0.1:8888';
+let proxyAgent = null;
+
+// Debug environment variables
+console.log('Environment variables:');
+console.log(`- USE_PROXY: "${process.env.USE_PROXY}"`);
+console.log(`- PROXY_URL: "${process.env.PROXY_URL}"`);
+console.log(`- useProxy evaluated to: ${useProxy} (${typeof useProxy})`);
+
+if (useProxy) {
+  proxyAgent = new HttpsProxyAgent(proxyUrl);
+  console.log(`Proxy enabled: ${proxyUrl}`);
+} else {
+  console.log('Proxy disabled');
+}
 
 // Serve static files from the frontend directory
 app.use(express.static(path.join(__dirname, '../frontend')));
@@ -87,16 +116,23 @@ app.post('/api/groq/speech', async (req, res) => {
     }, null, 2));
     
     // Forward the request to Groq's API
-    const response = await axios({
+    const axiosConfig = {
       method: 'post',
       url: apiUrl,
       data: formData,
       headers: headers,
-      httpsAgent: proxyAgent,
       validateStatus: false,
       timeout: 30000,
       proxy: false
-    });
+    };
+    
+    // Add proxy agent if enabled
+    if (useProxy && proxyAgent) {
+      axiosConfig.httpsAgent = proxyAgent;
+      console.log(`Using proxy for Groq API request: ${proxyUrl}`);
+    }
+    
+    const response = await axios(axiosConfig);
     
     console.log(`Response status: ${response.status}`);
     if (response.status !== 200) {
@@ -288,16 +324,25 @@ app.post('/api/speech/:version', async (req, res) => {
     }
     
     // Forward the request to Google's API
-    const response = await axios({
+    const axiosConfig = {
       method: 'post',
       url: apiUrl,
       data: requestData,
       headers: headers,
-      httpsAgent: proxyAgent,
       validateStatus: false, // Don't throw on error status codes
       timeout: 30000, // 30 second timeout
       proxy: false // Disable axios's built-in proxy handling
-    });
+    };
+    
+    // Add proxy agent if enabled
+    if (useProxy && proxyAgent) {
+      axiosConfig.httpsAgent = proxyAgent;
+      console.log(`Proxying request to ${apiUrl} through ${proxyUrl}`);
+    } else {
+      console.log(`Sending request to ${apiUrl} without proxy`);
+    }
+    
+    const response = await axios(axiosConfig);
     
     console.log(`Response status: ${response.status}`);
     if (response.status !== 200) {
@@ -518,16 +563,25 @@ app.post('/api/speech/:version/upload', upload.single('audio'), async (req, res)
     }, null, 2));
     
     // Forward the request to Google's API
-    const response = await axios({
+    const axiosConfig = {
       method: 'post',
       url: apiUrl,
       data: requestBody,
       headers: headers,
-      httpsAgent: proxyAgent,
-      validateStatus: false, // Don't throw on error status codes
-      timeout: 30000, // 30 second timeout
-      proxy: false // Disable axios's built-in proxy handling
-    });
+      validateStatus: false,
+      timeout: 30000,
+      proxy: false
+    };
+    
+    // Add proxy agent if enabled
+    if (useProxy && proxyAgent) {
+      axiosConfig.httpsAgent = proxyAgent;
+      console.log(`Proxying request to ${apiUrl} through ${proxyUrl}`);
+    } else {
+      console.log(`Sending request to ${apiUrl} without proxy`);
+    }
+    
+    const response = await axios(axiosConfig);
     
     console.log(`Response status: ${response.status}`);
     
@@ -612,7 +666,7 @@ app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => 
     }, null, 2));
     
     // Forward the request to Groq's API
-    const response = await axios({
+    const axiosConfig = {
       method: 'post',
       url: apiUrl,
       data: form,
@@ -620,11 +674,18 @@ app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => 
         ...headers,
         ...form.getHeaders()
       },
-      httpsAgent: proxyAgent,
       validateStatus: false,
       timeout: 30000,
       proxy: false
-    });
+    };
+    
+    // Add proxy agent if enabled
+    if (useProxy && proxyAgent) {
+      axiosConfig.httpsAgent = proxyAgent;
+      console.log(`Using proxy for Groq file upload: ${proxyUrl}`);
+    }
+    
+    const response = await axios(axiosConfig);
     
     console.log(`Response status: ${response.status}`);
     if (response.status !== 200) {
@@ -670,13 +731,26 @@ app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => 
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', proxy: proxyUrl });
+  res.json({ status: 'ok', proxy: useProxy ? proxyUrl : null });
+});
+
+// Status endpoint
+app.get('/api/status', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    proxy: useProxy ? proxyUrl : null,
+    proxyEnabled: useProxy 
+  });
 });
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-  console.log(`Proxy server running on port ${PORT}`);
-  console.log(`Using proxy: ${proxyUrl}`);
+  console.log(`Server running on port ${PORT}`);
+  if (useProxy) {
+    console.log(`Proxy enabled: ${proxyUrl}`);
+  } else {
+    console.log('Proxy disabled');
+  }
   console.log(`Current working directory: ${process.cwd()}`);
   console.log(`Node version: ${process.version}`);
   console.log(`Process ID: ${process.pid}`);
