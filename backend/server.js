@@ -125,6 +125,7 @@ app.post('/api/speech/:version', async (req, res) => {
       requestData = {
         config: {
           languageCode: languageCode,
+          // alternativeLanguageCodes: ["en-US"],
           model: model,
           enableAutomaticPunctuation: true
         },
@@ -213,14 +214,34 @@ app.post('/api/speech/:version', async (req, res) => {
           .map(result => result.alternatives && result.alternatives[0] ? result.alternatives[0].transcript : '')
           .filter(text => text)
           .join(' ');
-        console.log('Recognition result:', transcripts);
+        
+        // Extract confidence if available
+        let confidence = 0;
+        if (response.data.results[0] && 
+            response.data.results[0].alternatives && 
+            response.data.results[0].alternatives[0] && 
+            response.data.results[0].alternatives[0].confidence) {
+          confidence = response.data.results[0].alternatives[0].confidence;
+        }
+        
+        console.log(`Recognition result (confidence=${confidence.toFixed(2)}):`, transcripts);
       } else if (response.data && response.data.results && response.data.results.length > 0) {
         // Handle v2 API response format
         const transcripts = response.data.results
           .map(result => result.alternatives && result.alternatives[0] ? result.alternatives[0].transcript : '')
           .filter(text => text)
           .join(' ');
-        console.log('Recognition result:', transcripts);
+        
+        // Extract confidence if available
+        let confidence = 0;
+        if (response.data.results[0] && 
+            response.data.results[0].alternatives && 
+            response.data.results[0].alternatives[0] && 
+            response.data.results[0].alternatives[0].confidence) {
+          confidence = response.data.results[0].alternatives[0].confidence;
+        }
+        
+        console.log(`Recognition result (confidence=${confidence.toFixed(2)}):`, transcripts);
       }
       else {
         console.log('Recognition RAW result:', response.data);
