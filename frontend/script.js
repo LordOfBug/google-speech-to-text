@@ -231,12 +231,16 @@ function toggleStreamingMode() {
   logDebug(`Streaming mode ${isStreaming ? 'enabled' : 'disabled'}`);
   
   if (isStreaming) {
-    // Connect to WebSocket server when streaming mode is enabled
+    // Generate a new session ID for this streaming session
+    if (!window.currentStreamSessionId) {
+      window.currentStreamSessionId = window.generateSessionId();
+    }
+    logDebug('New streaming session started', { sessionId: window.currentStreamSessionId });
     connectWebSocket();
   } else if (webSocket) {
-    // Disconnect WebSocket when streaming mode is disabled
     webSocket.close();
     webSocket = null;
+    window.currentStreamSessionId = null;
   }
 }
 
@@ -317,6 +321,8 @@ function connectWebSocket() {
     // If we have pending stream data, send it now
     if (pendingStreamData) {
       logDebug('Sending pending stream data');
+      // Attach sessionId
+      pendingStreamData.sessionId = window.currentStreamSessionId;
       webSocket.send(JSON.stringify(pendingStreamData));
       pendingStreamData = null;
     }
@@ -657,6 +663,9 @@ async function startRecording() {
                 streamData.serviceAccount = serviceAccountData;
               }
               
+              // Add sessionId
+              streamData.sessionId = window.currentStreamSessionId;
+              
               webSocket.send(JSON.stringify(streamData));
               
               // If Groq, clear streaming chunks after sending
@@ -814,6 +823,9 @@ async function handleFileUpload() {
         if ((currentApiVersion === 'v1' || currentApiVersion === 'v2') && serviceAccountData) {
           streamData.serviceAccount = serviceAccountData;
         }
+        
+        // Add sessionId
+        streamData.sessionId = window.currentStreamSessionId;
         
         // Send to WebSocket server for streaming
         webSocket.send(JSON.stringify(streamData));

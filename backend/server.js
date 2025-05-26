@@ -788,16 +788,16 @@ wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
-      console.log('Received WebSocket message type:', data.type);
+      const sessionId = data.sessionId || 'no-session';
+      console.log(`[Session: ${sessionId}] Received WebSocket message type:`, data.type);
       
       if (data.type === 'start_stream') {
-        // Handle stream start request
         if (data.api === 'google') {
-          handleGoogleStreamingRequest(ws, data);
+          handleGoogleStreamingRequest(ws, data, sessionId);
         } else if (data.api === 'groq') {
-          handleGroqStreamingRequest(ws, data);
+          handleGroqStreamingRequest(ws, data, sessionId);
         } else {
-          ws.send(JSON.stringify({ type: 'error', message: 'Invalid API type' }));
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid API type', sessionId }));
         }
       }
     } catch (error) {
@@ -816,7 +816,7 @@ wss.on('connection', (ws) => {
 });
 
 // Google Speech-to-Text streaming handler
-async function handleGoogleStreamingRequest(ws, data) {
+async function handleGoogleStreamingRequest(ws, data, sessionId) {
   try {
     // Extract parameters from the request
     const { api, apiKey, content, languageCode, model, serviceAccount } = data;
@@ -824,19 +824,20 @@ async function handleGoogleStreamingRequest(ws, data) {
     
     // Check if we have authentication information
     if (!apiKey && !serviceAccount) {
-      ws.send(JSON.stringify({ type: 'error', message: 'API key or service account is required' }));
+      ws.send(JSON.stringify({ type: 'error', message: 'API key or service account is required', sessionId }));
       return;
     }
     
     if (!content) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Audio content is required' }));
+      ws.send(JSON.stringify({ type: 'error', message: 'Audio content is required', sessionId }));
       return;
     }
     
     // Send acknowledgment to client
     ws.send(JSON.stringify({ 
       type: 'start', 
-      message: `Starting Google ${apiVersion} streaming transcription` 
+      message: `Starting Google ${apiVersion} streaming transcription`,
+      sessionId
     }));
     
     // Create a client based on the authentication method
@@ -861,10 +862,10 @@ async function handleGoogleStreamingRequest(ws, data) {
           });
         }, 1000);
         
-        console.log(`Using service account authentication for Google ${apiVersion} streaming`);
+        console.log(`[Session: ${sessionId}] Using service account authentication for Google ${apiVersion} streaming`);
       } catch (error) {
         console.error('Error creating client with service account:', error);
-        ws.send(JSON.stringify({ type: 'error', message: `Service account error: ${error.message}` }));
+        ws.send(JSON.stringify({ type: 'error', message: `Service account error: ${error.message}`, sessionId }));
         return;
       }
     } else {
@@ -874,7 +875,8 @@ async function handleGoogleStreamingRequest(ws, data) {
         if (apiVersion === 'v2') {
           ws.send(JSON.stringify({ 
             type: 'warning', 
-            message: 'Google Speech V2 streaming with API key has limitations. For best results, use a service account.'
+            message: 'Google Speech V2 streaming with API key has limitations. For best results, use a service account.',
+            sessionId
           }));
         }
         
@@ -883,10 +885,10 @@ async function handleGoogleStreamingRequest(ws, data) {
           projectId: 'placeholder-project',
           authClient: new GoogleAuth().fromAPIKey(apiKey)
         });
-        console.log(`Using API key authentication for Google ${apiVersion} streaming`);
+        console.log(`[Session: ${sessionId}] Using API key authentication for Google ${apiVersion} streaming`);
       } catch (error) {
         console.error('Error creating client with API key:', error);
-        ws.send(JSON.stringify({ type: 'error', message: `API key error: ${error.message}` }));
+        ws.send(JSON.stringify({ type: 'error', message: `API key error: ${error.message}`, sessionId }));
         return;
       }
     }
@@ -926,7 +928,7 @@ async function handleGoogleStreamingRequest(ws, data) {
         requestConfig.model = model;
       }
       // Otherwise, don't set a model at all to use the default
-      console.log(`Using Google V2 API with model: ${model || 'default'}`);
+      console.log(`[Session: ${sessionId}] Using Google V2 API with model: ${model || 'default'}`);
     }
     
     // Add a response counter to track the sequence of responses
@@ -945,8 +947,8 @@ async function handleGoogleStreamingRequest(ws, data) {
     const recognizeStream = client
       .streamingRecognize(request)
       .on('error', (error) => {
-        console.error('Google Speech streaming error:', error);
-        ws.send(JSON.stringify({ type: 'error', message: `Streaming error: ${error.message}` }));
+        console.error(`[Session: ${sessionId}] Google Speech streaming error:`, error);
+        ws.send(JSON.stringify({ type: 'error', message: `Streaming error: ${error.message}`, sessionId }));
       })
       .on('data', (data) => {
         // Increment the response counter
@@ -964,7 +966,7 @@ async function handleGoogleStreamingRequest(ws, data) {
           const isFinalDuplicate = isFinal && transcript === lastFinalTranscript;
           
           // Log detailed information about the response
-          console.log(`[${apiVersion}] Stream Response #${responseCounter}:`, {
+          console.log(`[${apiVersion}][Session: ${sessionId}] Stream Response #${responseCounter}:`, {
             resultCount: data.results.length,
             isFinal: isFinal,
             transcript: transcript,
@@ -991,26 +993,27 @@ async function handleGoogleStreamingRequest(ws, data) {
               stability: result.stability || null,
               resultEndTime: result.resultEndTime || null,
               alternativesCount: result.alternatives.length,
-              isDuplicate: isDuplicate
+              isDuplicate: isDuplicate,
+              sessionId
             }));
             
             // Update tracking variables
             lastTranscript = transcript;
             if (isFinal) {
               lastFinalTranscript = transcript;
-              console.log(`Final transcript: ${transcript}`);
-              console.log(`Confidence: ${confidence}`);
+              console.log(`[Session: ${sessionId}] Final transcript: ${transcript}`);
+              console.log(`[Session: ${sessionId}] Confidence: ${confidence}`);
             }
           } else {
-            console.log(`Skipping duplicate transcript: "${transcript}"`);
+            console.log(`[Session: ${sessionId}] Skipping duplicate transcript: "${transcript}"`);
           }
         } else {
-          console.log(`[${apiVersion}] Stream Response #${responseCounter}: No results in response`);
+          console.log(`[${apiVersion}][Session: ${sessionId}] Stream Response #${responseCounter}: No results in response`);
         }
       })
       .on('end', () => {
-        console.log('Google Speech streaming ended');
-        ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended' }));
+        console.log(`[Session: ${sessionId}] Google Speech streaming ended`);
+        ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended', sessionId }));
       });
     
     // Convert base64 audio to buffer and send to recognize stream
@@ -1020,31 +1023,31 @@ async function handleGoogleStreamingRequest(ws, data) {
     audioStream.push(null);
     audioStream.pipe(recognizeStream);
     
-    console.log('Started Google Speech streaming transcription');
+    console.log(`[Session: ${sessionId}] Started Google Speech streaming transcription`);
   } catch (error) {
-    console.error('Google streaming handler error:', error);
-    ws.send(JSON.stringify({ type: 'error', message: error.message }));
+    console.error(`[Session: ${sessionId}] Google streaming handler error:`, error);
+    ws.send(JSON.stringify({ type: 'error', message: error.message, sessionId }));
   }
 }
 
 // Groq Whisper streaming handler
-async function handleGroqStreamingRequest(ws, data) {
+async function handleGroqStreamingRequest(ws, data, sessionId) {
   try {
     // Extract parameters from the request
     const { apiKey, content, model, language, prompt, fileType, fileName } = data;
     
     if (!apiKey) {
-      ws.send(JSON.stringify({ type: 'error', message: 'API key is required' }));
+      ws.send(JSON.stringify({ type: 'error', message: 'API key is required', sessionId }));
       return;
     }
     
     if (!content) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Audio content is required' }));
+      ws.send(JSON.stringify({ type: 'error', message: 'Audio content is required', sessionId }));
       return;
     }
     
     // Send acknowledgment to client
-    ws.send(JSON.stringify({ type: 'start', message: 'Starting Groq streaming transcription' }));
+    ws.send(JSON.stringify({ type: 'start', message: 'Starting Groq streaming transcription', sessionId }));
     
     // Groq API URL for transcriptions (not streaming specific)
     const apiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions';
@@ -1085,7 +1088,7 @@ async function handleGroqStreamingRequest(ws, data) {
       detectedFormat = 'mp3';
     }
     
-    console.log(`Detected audio format: ${detectedFormat}`);
+    console.log(`[Session: ${sessionId}] Detected audio format: ${detectedFormat}`);
     
     // Create a temporary file with the appropriate extension
     const tempFilePath = path.join(uploadsDir, `temp_${Date.now()}.${detectedFormat}`);
@@ -1137,10 +1140,10 @@ async function handleGroqStreamingRequest(ws, data) {
     // Add proxy agent if enabled
     if (useProxy && proxyAgent) {
       axiosConfig.httpsAgent = proxyAgent;
-      console.log(`Using proxy for Groq streaming: ${proxyUrl}`);
+      console.log(`[Session: ${sessionId}] Using proxy for Groq streaming: ${proxyUrl}`);
     }
     
-    console.log('Starting Groq streaming request');
+    console.log(`[Session: ${sessionId}] Starting Groq streaming request`);
     
     // Make the request to Groq API
     const response = await axios(axiosConfig);
@@ -1159,7 +1162,7 @@ async function handleGroqStreamingRequest(ws, data) {
           errorMessage = `Error: ${response.status}`;
         }
         
-        ws.send(JSON.stringify({ type: 'error', message: errorMessage }));
+        ws.send(JSON.stringify({ type: 'error', message: errorMessage, sessionId }));
         
         // Clean up temp file
         fs.unlink(tempFilePath, (err) => {
@@ -1190,7 +1193,7 @@ async function handleGroqStreamingRequest(ws, data) {
           
           if (jsonStr === '[DONE]') {
             // End of stream
-            ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended' }));
+            ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended', sessionId }));
           } else {
             try {
               const data = JSON.parse(jsonStr);
@@ -1200,7 +1203,8 @@ async function handleGroqStreamingRequest(ws, data) {
                 type: 'transcription',
                 isFinal: false,
                 transcript: data.text || '',
-                confidence: data.confidence || 0
+                confidence: data.confidence || 0,
+                sessionId
               }));
               
             } catch (e) {
@@ -1217,8 +1221,8 @@ async function handleGroqStreamingRequest(ws, data) {
     });
     
     response.data.on('end', () => {
-      console.log('Groq streaming ended');
-      ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended' }));
+      console.log(`[Session: ${sessionId}] Groq streaming ended`);
+      ws.send(JSON.stringify({ type: 'end', message: 'Streaming ended', sessionId }));
       
       // Clean up temp file
       fs.unlink(tempFilePath, (err) => {
@@ -1228,7 +1232,7 @@ async function handleGroqStreamingRequest(ws, data) {
     
     response.data.on('error', (error) => {
       console.error('Groq streaming error:', error);
-      ws.send(JSON.stringify({ type: 'error', message: `Streaming error: ${error.message}` }));
+      ws.send(JSON.stringify({ type: 'error', message: `Streaming error: ${error.message}`, sessionId }));
       
       // Clean up temp file
       fs.unlink(tempFilePath, (err) => {
@@ -1236,9 +1240,10 @@ async function handleGroqStreamingRequest(ws, data) {
       });
     });
     
+    console.log(`[Session: ${sessionId}] Started Groq streaming transcription`);
   } catch (error) {
-    console.error('Groq streaming handler error:', error);
-    ws.send(JSON.stringify({ type: 'error', message: error.message }));
+    console.error(`[Session: ${sessionId}] Groq streaming handler error:`, error);
+    ws.send(JSON.stringify({ type: 'error', message: error.message, sessionId }));
   }
 }
 
