@@ -817,7 +817,7 @@ app.post('/api/azure/speech', async (req, res) => {
       url: apiUrl,
       data: audioData,
       headers: headers,
-      responseType: 'json',
+      responseType: 'text', // Get raw text to inspect and parse manually
       validateStatus: false, // Handle all status codes manually
       timeout: 30000, // 30 seconds timeout
       proxy: false
@@ -828,66 +828,94 @@ app.post('/api/azure/speech', async (req, res) => {
       console.log(`Using proxy for Azure Speech API request: ${proxyUrl}`);
     }
 
-    const response = await axios(axiosConfig);
+    const azureAxiosResponse = await axios(axiosConfig);
+    const rawResponseText = azureAxiosResponse.data; // Data is now raw text
 
-    console.log(`Azure Speech API Response Status: ${response.status}`);
-    // console.log('Azure Speech API Response Headers:', JSON.stringify(response.headers, null, 2)); // Can be verbose
-    console.log('Azure Speech API Response Data:', JSON.stringify(response.data, null, 2));
+    console.log('Azure Speech API Raw Response Text:', rawResponseText);
+    console.log('Azure Speech API Response Status:', azureAxiosResponse.status);
 
-    if (response.status === 200) {
-      // Check RecognitionStatus for success
-      if (response.data && response.data.RecognitionStatus === 'Success') {
-        console.log(`Recognition result: ${response.data.DisplayText}`);
-        res.status(200).json(response.data);
+    let responseData;
+    try {
+      responseData = JSON.parse(rawResponseText);
+      console.log('Azure Speech API Parsed Response Data:', responseData);
+    } catch (parseError) {
+      console.error('Azure Speech API: Error parsing JSON response:', parseError);
+      // If parsing fails, the response wasn't valid JSON. This could be an HTML error page or plain text.
+      // Return the raw text as it might contain the actual error message.
+      const errorStatus = azureAxiosResponse.status === 200 ? 500 : azureAxiosResponse.status;
+      return res.status(errorStatus).json({
+        error: {
+          code: azureAxiosResponse.status, // Report original status
+          message: 'Azure API response was not valid JSON.',
+          details: rawResponseText // Send the raw non-JSON text
+        }
+      });
+    }
+
+    // At this point, responseData is the parsed JSON object from Azure.
+    if (azureAxiosResponse.status === 200) {
+      if (responseData && responseData.RecognitionStatus === 'Success') {
+        console.log(`Recognition result: ${responseData.DisplayText}`);
+        res.status(200).json(responseData);
       } else {
-        const errorMessage = response.data && response.data.DisplayText ? response.data.DisplayText : (response.data.RecognitionStatus || 'Azure API returned non-success status or unrecognized response format');
-        console.error(`Azure Speech API Error (Status ${response.status}): ${errorMessage}`);
-        res.status(response.status !== 200 ? response.status : 500).json({ 
+        // HTTP 200, but RecognitionStatus is not 'Success' or responseData is malformed/unexpected.
+        const errorMessage = responseData?.DisplayText || responseData?.RecognitionStatus || 'Azure API returned a 200 OK but with non-success status or unrecognized response format';
+        console.error(`Azure Speech API Error (Status ${azureAxiosResponse.status}, Recognition: ${responseData?.RecognitionStatus}): ${errorMessage}`);
+        // Treat as an internal server error from our app's perspective if Azure said 200 but content is problematic.
+        res.status(500).json({ 
           error: { 
-            code: response.status, 
+            code: azureAxiosResponse.status, // Keep original Azure status for info
             message: `Azure Speech API Error: ${errorMessage}`,
-            details: response.data 
+            details: responseData // Send back the problematic parsed data
           } 
         });
       }
     } else {
-      // Handle non-200 responses
-      let errorMessage = 'Unknown Azure API error';
-      if (response.data) {
-        if (response.data.error && response.data.error.message) {
-          errorMessage = response.data.error.message;
-        } else if (response.data.Message) {
-          errorMessage = response.data.Message;
-        } else if (typeof response.data === 'string') {
-          errorMessage = response.data;
-        } else {
-          errorMessage = JSON.stringify(response.data);
-        }
-      }
-      console.error(`Azure Speech API HTTP Error (Status ${response.status}): ${errorMessage}`);
-      res.status(response.status).json({ 
+      // Non-200 response from Azure. responseData (parsed from rawResponseText) should contain Azure's error details.
+      const errorMessage = responseData?.error?.message || responseData?.Message || 'Unknown Azure API error (non-200 status)';
+      console.error(`Azure Speech API HTTP Error (Status ${azureAxiosResponse.status}): ${errorMessage}`);
+      res.status(azureAxiosResponse.status).json({ 
         error: { 
-          code: response.status, 
+          code: azureAxiosResponse.status, 
           message: `Azure Speech API HTTP Error: ${errorMessage}`,
-          details: response.data
+          details: responseData // Send Azure's structured error response
         } 
       });
     }
 
   } catch (error) {
-    console.error('Azure proxy error:', error.message);
-    if (error.response) {
-      console.error('Azure proxy error response data:', error.response.data);
-      console.error('Azure proxy error response status:', error.response.status);
+    // This catches errors from the axios call itself (e.g., network error, timeout) or other unexpected errors.
+    console.error('Azure proxy error or unhandled exception in /api/azure/speech:', error.message);
+    if (error.isAxiosError && error.response) {
+      // Log details if it's an Axios error with a response from server/proxy
+      console.error('Axios error response data:', error.response.data);
+      console.error('Axios error response status:', error.response.status);
+      res.status(error.response.status || 500).json({
+        error: {
+          code: error.response.status || 500,
+          message: `Azure proxy error: ${error.message}`,
+          details: error.response.data
+        }
+      });
+    } else if (error.isAxiosError && error.request) {
+        // Axios error, but no response received (e.g. network error)
+        console.error('Axios error request data:', error.request);
+        res.status(500).json({
+            error: {
+                code: 500,
+                message: `Network error or no response from Azure/proxy: ${error.message}`
+            }
+        });
+    } else {
+      // Non-Axios error or Axios error without response/request details
+      res.status(500).json({
+        error: {
+          code: 500,
+          message: `Azure proxy error or internal server error: ${error.message}`,
+          details: error.cause || null
+        }
+      });
     }
-    // console.error('Error stack:', error.stack); // Can be verbose
-    res.status(500).json({
-      error: {
-        code: 500,
-        message: `Azure proxy error: ${error.message}`,
-        details: error.response ? error.response.data : (error.cause || null)
-      }
-    });
   }
 });
 
