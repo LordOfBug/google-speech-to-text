@@ -13,6 +13,7 @@ const audioLevelFill = document.getElementById('audio-level-fill');
 // API Tabs
 const googleTab = document.getElementById('google-tab');
 const groqTab = document.getElementById('groq-tab');
+const azureTab = document.getElementById('azure-tab');
 
 // Groq API Inputs
 const groqApiKey = document.getElementById('groq-api-key');
@@ -20,6 +21,12 @@ const groqModel = document.getElementById('groq-model');
 const groqLanguage = document.getElementById('groq-language');
 const groqPrompt = document.getElementById('groq-prompt');
 const groqFileUpload = document.getElementById('groq-file-upload');
+
+// Azure API Inputs
+const azureApiKeyInput = document.getElementById('azure-api-key');
+const azureRegionInput = document.getElementById('azure-region');
+const azureLanguageInput = document.getElementById('azure-language');
+const azureFileUpload = document.getElementById('azure-file-upload');
 
 // Service account data
 let serviceAccountData = null;
@@ -69,6 +76,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (savedV2ProjectId) googleProjectId.value = savedV2ProjectId;
   if (savedV2Region) googleRegion.value = savedV2Region;
   if (savedGroqKey) groqApiKey.value = savedGroqKey;
+
+  const savedAzureKey = localStorage.getItem('azureApiKey');
+  const savedAzureRegion = localStorage.getItem('azureRegion');
+  const savedAzureLanguage = localStorage.getItem('azureLanguage');
+  if (savedAzureKey) azureApiKeyInput.value = savedAzureKey;
+  if (savedAzureRegion) azureRegionInput.value = savedAzureRegion;
+  if (savedAzureLanguage) azureLanguageInput.value = savedAzureLanguage;
   
   // Load saved language selections for Google V2
   const savedV2Languages = localStorage.getItem('v2SelectedLanguages');
@@ -90,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set up Google API version toggle
   googleV1Radio.addEventListener('change', toggleGoogleApiVersion);
   googleV2Radio.addEventListener('change', toggleGoogleApiVersion);
+  azureTab.addEventListener('click', () => setApiVersion('azure'));
   
   // Default to V1 if no version is selected
   if (!googleV1Radio.checked && !googleV2Radio.checked) {
@@ -101,7 +116,22 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Set up event listeners
   recordButton.addEventListener('click', toggleRecording);
-  uploadButton.addEventListener('click', handleFileUpload);
+  uploadButton.addEventListener('click', () => {
+    // Trigger file input click based on active tab
+    let fileInput;
+    if (currentApiVersion === 'groq') {
+      fileInput = groqFileUpload;
+    } else if (currentApiVersion === 'azure') {
+      fileInput = azureFileUpload;
+    } else { // Google V1/V2
+      fileInput = googleFileUpload;
+    }
+    if (fileInput) {
+      fileInput.click(); // This will trigger the 'change' event handled by handleFileUpload
+    }
+  });
+  googleFileUpload.addEventListener('change', handleFileUpload);
+  azureFileUpload.addEventListener('change', handleFileUpload);
   debugModeCheckbox.addEventListener('change', toggleDebugMode);
   streamingModeCheckbox.addEventListener('change', toggleStreamingMode);
   
@@ -117,6 +147,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setApiVersion(currentApiVersion === 'groq' ? (googleV1Radio.checked ? 'v1' : 'v2') : currentApiVersion);
   });
   groqTab.addEventListener('click', () => setApiVersion('groq'));
+  azureTab.addEventListener('click', () => setApiVersion('azure'));
   
   // Service account file upload for unified Google tab
   googleServiceAccount.addEventListener('change', handleServiceAccountUpload);
@@ -132,6 +163,11 @@ document.addEventListener('DOMContentLoaded', () => {
     statusElement.className = 'alert alert-danger';
     recordButton.disabled = true;
   }
+  
+  // Azure API input event listeners
+  azureApiKeyInput.addEventListener('input', () => localStorage.setItem('azureApiKey', azureApiKeyInput.value));
+  azureRegionInput.addEventListener('input', () => localStorage.setItem('azureRegion', azureRegionInput.value));
+  azureLanguageInput.addEventListener('change', () => localStorage.setItem('azureLanguage', azureLanguageInput.value));
 });
 
 // Handle service account file upload
@@ -184,10 +220,13 @@ function setApiVersion(version) {
     googleTab.setAttribute('aria-selected', 'true');
     groqTab.classList.remove('active');
     groqTab.setAttribute('aria-selected', 'false');
+    azureTab.classList.remove('active');
+    azureTab.setAttribute('aria-selected', 'false');
     
     // Show Google content tab
     document.getElementById('google-content').classList.add('show', 'active');
     document.getElementById('groq-content').classList.remove('show', 'active');
+    document.getElementById('azure-content').classList.remove('show', 'active');
     
     // Update the radio button selection based on version
     if (version === 'v1') {
@@ -205,10 +244,26 @@ function setApiVersion(version) {
     groqTab.setAttribute('aria-selected', 'true');
     googleTab.classList.remove('active');
     googleTab.setAttribute('aria-selected', 'false');
+    azureTab.classList.remove('active');
+    azureTab.setAttribute('aria-selected', 'false');
     
     // Show Groq content tab
     document.getElementById('groq-content').classList.add('show', 'active');
     document.getElementById('google-content').classList.remove('show', 'active');
+    document.getElementById('azure-content').classList.remove('show', 'active');
+  } else if (version === 'azure') {
+    // For Azure API
+    azureTab.classList.add('active');
+    azureTab.setAttribute('aria-selected', 'true');
+    googleTab.classList.remove('active');
+    googleTab.setAttribute('aria-selected', 'false');
+    groqTab.classList.remove('active');
+    groqTab.setAttribute('aria-selected', 'false');
+    
+    // Show Azure content tab
+    document.getElementById('azure-content').classList.add('show', 'active');
+    document.getElementById('google-content').classList.remove('show', 'active');
+    document.getElementById('groq-content').classList.remove('show', 'active');
   }
   
   logDebug(`API version set to: ${version}`);
@@ -768,6 +823,8 @@ async function handleFileUpload() {
   let fileInput;
   if (currentApiVersion === 'groq') {
     fileInput = groqFileUpload;
+  } else if (currentApiVersion === 'azure') {
+    fileInput = azureFileUpload;
   } else {
     // For Google (both V1 and V2)
     fileInput = googleFileUpload;
@@ -1005,149 +1062,110 @@ async function sendAudioToApi(base64Audio) {
   try {
     statusElement.textContent = 'Processing audio...';
     statusElement.className = 'alert alert-info';
-    
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      statusElement.textContent = 'API key is required';
+
+    const currentKey = getApiKey(); // Centralized API key retrieval
+    if (!currentKey && !(currentApiVersion === 'v2' && getServiceAccountData())) {
+      // Allow V2 with service account to proceed without an API key input
+      statusElement.textContent = 'API key is required.';
       statusElement.className = 'alert alert-danger';
       return;
     }
-    
-    let endpoint, requestBody;
-    
-    if (currentApiVersion === 'groq') {
-      // For Groq API
-      endpoint = '/api/groq/speech';
-      requestBody = {
-        apiKey: apiKey,
-        model: getModel(),
+
+    let apiUrl, params = {}, body = {};
+
+    if (currentApiVersion === 'azure') {
+      if (!azureRegionInput.value) {
+        statusElement.textContent = 'Azure Region is required.';
+        statusElement.className = 'alert alert-danger';
+        return;
+      }
+      apiUrl = '/api/azure/speech';
+      // Azure key and region are passed in query for the backend proxy to use in headers to Azure
+      params = {
+        key: currentKey,
+        region: azureRegionInput.value
+      };
+      // Body for Azure includes content and other details for the proxy's reference or direct use if designed so
+      body = {
+        apiKey: currentKey, 
+        region: azureRegionInput.value,
+        language: getLanguageCode(),
         content: base64Audio
       };
-      
-      // Add language if specified
-      if (groqLanguage.value) {
-        requestBody.language = groqLanguage.value;
+    } else if (currentApiVersion === 'groq') {
+      apiUrl = '/api/groq/speech';
+      // Groq API key can be in query or body; backend server.js checks both.
+      // For simplicity here, backend primarily uses query.key for auth check, but include in body too.
+      params = { key: currentKey }; 
+      body = {
+        apiKey: currentKey,
+        model: getModel(),
+        language: getLanguageCode() || null, // Groq language is optional
+        prompt: groqPrompt.value || null,   // Groq prompt is optional
+        content: base64Audio
+      };
+    } else { // Google V1 or V2
+      apiUrl = `/api/speech/${currentApiVersion}`;
+      // Google API Key in query for auth if not using service account
+      // If service account is used, key might be undefined, and backend handles auth with service account.
+      if (currentKey) {
+        params = { key: currentKey }; 
       }
       
-      // Add prompt if specified
-      if (groqPrompt.value) {
-        requestBody.prompt = groqPrompt.value;
-      }
-    } else {
-      // For Google Speech API (v1 or v2)
-      endpoint = `/api/speech/${currentApiVersion}`;
-      
+      body = {
+        apiKey: currentKey, // Also in body for consistency or if backend prefers, server.js handles it
+        content: base64Audio,
+        model: getModel(),
+        serviceAccount: getServiceAccountData() // Will be null if not provided
+      };
+
       if (currentApiVersion === 'v1') {
-        // For V1 API, the request structure is simple
-        requestBody = {
-          languageCode: getLanguageCode(),
-          model: getModel(),
-          content: base64Audio
-        };
-      } else {
-        // For V2 API, the request structure is different
-        const projectId = googleProjectId.value;
-        const region = googleRegion.value;
+        body.languageCode = getLanguageCode();
+      } else { // V2
+        body.projectId = googleProjectId.value || (getServiceAccountData() ? getServiceAccountData().project_id : null);
+        body.region = googleRegion.value;
+        body.languageCodes = getSelectedLanguages(); // For V2, pass multiple languages
         
-        // For Chirp model with multiple languages, we can specify all expected languages
-        const languages = getSelectedLanguages();
-        
-        requestBody = {
-          recognizer: `projects/${projectId}/locations/${region}/recognizers/_`,
-          config: {
-            // Include all selected languages for Chirp 2
-            language_codes: languages,
-            model: getModel(),
-            features: {
-              enable_automatic_punctuation: true
-            },
-            auto_decoding_config: {}
-          },
-          content: base64Audio
-        };
-        
-        // Log the languages being used
-        if (languages.length > 1 && (getModel() === 'chirp' || getModel() === 'chirp_2' || getModel() === 'chirp_3')) {
-          logDebug('Using multiple languages with Chirp', { languages });
+        // Backend /api/speech/v2 handles constructing the full recognizer path and config structure.
+        // Frontend just needs to ensure Project ID is available if using service account without a global API key.
+        if (!body.projectId && !params.key && !body.serviceAccount) { 
+          statusElement.textContent = 'Google Project ID is required for V2 API when not using API key or service account.';
+          statusElement.className = 'alert alert-danger';
+          return;
         }
       }
     }
-    
-    // Save API key to localStorage
-    if (currentApiVersion === 'v1' || currentApiVersion === 'v2') {
-      // For Google (both V1 and V2)
-      localStorage.setItem(`${currentApiVersion}ApiKey`, apiKey);
-      
-      // For V2, also save project ID, region, and selected languages
-      if (currentApiVersion === 'v2') {
-        localStorage.setItem('v2ProjectId', googleProjectId.value);
-        localStorage.setItem('v2Region', googleRegion.value);
-        
-        // Save selected languages
-        const selectedLanguages = getSelectedLanguages();
-        localStorage.setItem('v2SelectedLanguages', JSON.stringify(selectedLanguages));
-      }
-    } else if (currentApiVersion === 'groq') {
-      localStorage.setItem('groqApiKey', apiKey);
-    }
-    
-    logDebug('Sending request to API', { 
-      version: currentApiVersion,
-      requestBody: {
-        ...requestBody,
-        audio: requestBody.audio ? { content: '(base64 audio data)' } : undefined,
-        content: requestBody.content ? '(base64 audio data)' : undefined
-      }
-    });
-    
-    // Send request to our proxy server
-    let apiUrl;
-    
-    if (currentApiVersion === 'groq') {
-      // For Groq API
-      apiUrl = '/api/groq/speech';
-      // API key is already in the request body
-    } else {
-      // For Google Speech API (v1 or v2)
-      apiUrl = `/api/speech/${currentApiVersion}?key=${encodeURIComponent(apiKey)}`;
-      
-      // Add project ID and region to URL for V2 API
-      if (currentApiVersion === 'v2') {
-        const projectId = googleProjectId.value;
-        const region = googleRegion.value;
-        apiUrl += `&project=${projectId}&region=${region}`;
-      }
-    }
-    
-    // Create headers
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-    
-    // Pass service account to backend for authentication
-    if (serviceAccountData && currentApiVersion === 'v2') {
-      // We need to pass the service account data for authentication
-      requestBody.serviceAccount = serviceAccountData;
-      logDebug('Passing service account to backend for authentication');
-    }
-    
-    const response = await fetch(apiUrl, {
+
+    logDebug(`Sending audio to ${currentApiVersion} API`, { apiUrl: apiUrl, params: params, body: body });
+
+    const queryString = new URLSearchParams(params).toString();
+    const fullUrl = queryString ? `${apiUrl}?${queryString}` : apiUrl;
+
+    const response = await fetch(fullUrl, {
       method: 'POST',
-      headers: headers,
-      body: JSON.stringify(requestBody)
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
     });
-    
+
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || `Server error: ${response.status}`);
+      // Try to parse JSON error, otherwise use status text
+      const errorText = await response.text(); // Get raw text first
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch (e) {
+        errorData = { error: { message: `Server error: ${response.statusText} (${response.status}) - ${errorText}` } };
+      }
+      throw new Error(errorData.error?.message || `Server error: ${response.statusText} (${response.status})`);
     }
-    
+
     const data = await response.json();
     logDebug('API response', data);
-    
-    // Process results
+
     processResults(data);
-    
+
     statusElement.textContent = 'Audio processed successfully';
     statusElement.className = 'alert alert-success';
     
@@ -1161,7 +1179,21 @@ async function sendAudioToApi(base64Audio) {
 
 // Process API results
 function processResults(data) {
-  if (currentApiVersion === 'groq') {
+  if (currentApiVersion === 'azure') {
+    // Process Azure API response
+    if (data.RecognitionStatus === 'Success' && data.DisplayText) {
+      transcriptElement.textContent = data.DisplayText;
+      if (data.NBest && data.NBest.length > 0 && data.NBest[0].Confidence !== undefined) {
+        confidenceElement.textContent = `Confidence: ${(data.NBest[0].Confidence * 100).toFixed(2)}%`;
+      } else {
+        confidenceElement.textContent = 'Confidence: N/A'; // Azure might not always provide confidence
+      }
+    } else {
+      transcriptElement.textContent = data.DisplayText || (data.error ? data.error.message : 'No transcription available or error occurred.');
+      confidenceElement.textContent = '';
+      logDebug('Azure API Error or Unsuccessful Recognition', data);
+    }
+  } else if (currentApiVersion === 'groq') {
     // Process Groq API response
     if (data.text) {
       transcriptElement.textContent = data.text;
@@ -1225,6 +1257,8 @@ function processResults(data) {
 function getApiKey() {
   if (currentApiVersion === 'groq') {
     return groqApiKey.value;
+  } else if (currentApiVersion === 'azure') {
+    return azureApiKeyInput.value;
   } else {
     // For Google (both V1 and V2)
     return googleApiKey.value;
@@ -1234,6 +1268,8 @@ function getApiKey() {
 function getLanguageCode() {
   if (currentApiVersion === 'groq') {
     return groqLanguage.value || 'en';
+  } else if (currentApiVersion === 'azure') {
+    return azureLanguageInput.value || 'en-US';
   } else if (currentApiVersion === 'v1') {
     return googleLanguage.value || 'en-US';
   } else {
@@ -1245,6 +1281,8 @@ function getLanguageCode() {
 function getSelectedLanguages() {
   if (currentApiVersion === 'groq') {
     return [groqLanguage.value || 'en'];
+  } else if (currentApiVersion === 'azure') {
+    return [azureLanguageInput.value || 'en-US']; 
   } else if (currentApiVersion === 'v1') {
     return [googleLanguage.value || 'en-US'];
   } else {
@@ -1263,6 +1301,8 @@ function getSelectedLanguages() {
 function getModel() {
   if (currentApiVersion === 'groq') {
     return groqModel.value;
+  } else if (currentApiVersion === 'azure') {
+    return null; // Azure doesn't have a model selection in this UI yet
   } else {
     // For Google (both V1 and V2)
     return googleModel.value;
@@ -1271,7 +1311,7 @@ function getModel() {
 
 // Get service account data
 function getServiceAccountData() {
-  if (currentApiVersion === 'groq' || !googleServiceAccount.files || googleServiceAccount.files.length === 0) {
+  if (currentApiVersion === 'groq' || currentApiVersion === 'azure' || !googleServiceAccount.files || googleServiceAccount.files.length === 0) {
     return null;
   }
   return serviceAccountData;

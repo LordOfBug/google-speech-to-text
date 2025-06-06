@@ -54,6 +54,9 @@
           <li class="nav-item" role="presentation">
             <button class="nav-link" id="groq-tab" data-bs-toggle="tab" data-bs-target="#groq-content" type="button" role="tab" aria-controls="groq-content" aria-selected="false">Groq API</button>
           </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="azure-tab" data-bs-toggle="tab" data-bs-target="#azure-content" type="button" role="tab" aria-controls="azure-content" aria-selected="false">Azure API</button>
+          </li>
         </ul>
       </div>
       <div class="card-body">
@@ -222,6 +225,57 @@
             </div>
           </div>
           
+          <!-- Azure Speech API Tab -->
+          <div class="tab-pane fade" id="azure-content" role="tabpanel" aria-labelledby="azure-tab">
+            <div class="card mb-3">
+              <div class="card-header">Authentication & Configuration</div>
+              <div class="card-body">
+                <div class="row mb-3">
+                  <div class="col-md-6">
+                    <label for="azure-api-key" class="form-label">Azure API Key</label>
+                    <input type="password" class="form-control" id="azure-api-key" placeholder="Enter your Azure Speech API Key">
+                  </div>
+                  <div class="col-md-6">
+                    <label for="azure-region" class="form-label">Azure Region</label>
+                    <input type="text" class="form-control" id="azure-region" placeholder="e.g., eastus, westus2">
+                    <div class="form-text">Enter the region for your Azure Speech service (e.g., eastus).</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card mb-3">
+              <div class="card-header">Language</div>
+              <div class="card-body">
+                <div class="row mb-3">
+                  <div class="col-md-12">
+                    <label for="azure-language" class="form-label">Language</label>
+                    <select class="form-select" id="azure-language">
+                      <option value="en-US" selected>English (United States)</option>
+                      <option value="en-GB">English (Great Britain)</option>
+                      <option value="es-ES">Spanish (Spain)</option>
+                      <option value="fr-FR">French (France)</option>
+                      <option value="de-DE">German (Germany)</option>
+                      <option value="it-IT">Italian (Italy)</option>
+                      <option value="pt-BR">Portuguese (Brazil)</option>
+                      <option value="zh-CN">Chinese (Mandarin, Simplified)</option>
+                      <option value="ja-JP">Japanese (Japan)</option>
+                      <option value="ko-KR">Korean (Korea)</option>
+                      <option value="ru-RU">Russian (Russia)</option>
+                      <option value="ar-AE">Arabic (United Arab Emirates)</option>
+                      <!-- Add more languages as needed -->
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="row mb-3">
+              <div class="col-md-6">
+                <label for="azure-file-upload" class="form-label">Upload Audio File (Optional)</label>
+                <input class="form-control" type="file" id="azure-file-upload" accept="audio/*">
+              </div>
+            </div>
+          </div>
+
           <!-- Groq API Tab -->
           <div class="tab-pane fade" id="groq-content" role="tabpanel" aria-labelledby="groq-tab">
             <div class="row mb-3">

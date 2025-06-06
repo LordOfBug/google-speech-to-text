@@ -775,6 +775,123 @@ app.get('/api/status', (req, res) => {
 });
 
 // Create HTTP server
+// Azure Speech-to-Text API endpoint
+app.post('/api/azure/speech', async (req, res) => {
+  try {
+    const azureKey = req.query.key || req.body.apiKey;
+    const azureRegion = req.query.region || req.body.region;
+    
+    if (!azureKey) {
+      return res.status(400).json({ error: { code: 400, message: 'Azure API key is required' } });
+    }
+    if (!azureRegion) {
+      return res.status(400).json({ error: { code: 400, message: 'Azure region is required' } });
+    }
+
+    const language = req.body.language || 'en-US'; // Default to en-US
+    const content = req.body.content; // Base64 encoded audio
+
+    if (!content) {
+      return res.status(400).json({ error: { code: 400, message: 'Audio content is required' } });
+    }
+
+    const apiUrl = `https://${azureRegion}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${language}&format=detailed`;
+    
+    // Decode base64 audio content to binary buffer
+    const audioData = Buffer.from(content, 'base64');
+
+    const headers = {
+      'Ocp-Apim-Subscription-Key': azureKey,
+      'Content-Type': 'audio/ogg; codecs=opus', // Assuming frontend sends webm/opus, adjust if necessary
+      'Accept': 'application/json;text/xml'
+    };
+
+    console.log(`Azure Speech API Request:`);
+    console.log(`- URL: ${apiUrl}`);
+    console.log(`- Method: POST`);
+    console.log(`- Headers: Ocp-Apim-Subscription-Key: ${azureKey.length > 4 ? azureKey.substring(0, 4) + '...' : '...'} , Content-Type: ${headers['Content-Type']}`);
+    console.log(`- Audio data length: ${audioData.length} bytes`);
+
+    const axiosConfig = {
+      method: 'post',
+      url: apiUrl,
+      data: audioData,
+      headers: headers,
+      responseType: 'json',
+      validateStatus: false, // Handle all status codes manually
+      timeout: 30000, // 30 seconds timeout
+      proxy: false
+    };
+
+    if (useProxy && proxyAgent) {
+      axiosConfig.httpsAgent = proxyAgent;
+      console.log(`Using proxy for Azure Speech API request: ${proxyUrl}`);
+    }
+
+    const response = await axios(axiosConfig);
+
+    console.log(`Azure Speech API Response Status: ${response.status}`);
+    // console.log('Azure Speech API Response Headers:', JSON.stringify(response.headers, null, 2)); // Can be verbose
+    console.log('Azure Speech API Response Data:', JSON.stringify(response.data, null, 2));
+
+    if (response.status === 200) {
+      // Check RecognitionStatus for success
+      if (response.data && response.data.RecognitionStatus === 'Success') {
+        console.log(`Recognition result: ${response.data.DisplayText}`);
+        res.status(200).json(response.data);
+      } else {
+        const errorMessage = response.data && response.data.DisplayText ? response.data.DisplayText : (response.data.RecognitionStatus || 'Azure API returned non-success status or unrecognized response format');
+        console.error(`Azure Speech API Error (Status ${response.status}): ${errorMessage}`);
+        res.status(response.status !== 200 ? response.status : 500).json({ 
+          error: { 
+            code: response.status, 
+            message: `Azure Speech API Error: ${errorMessage}`,
+            details: response.data 
+          } 
+        });
+      }
+    } else {
+      // Handle non-200 responses
+      let errorMessage = 'Unknown Azure API error';
+      if (response.data) {
+        if (response.data.error && response.data.error.message) {
+          errorMessage = response.data.error.message;
+        } else if (response.data.Message) {
+          errorMessage = response.data.Message;
+        } else if (typeof response.data === 'string') {
+          errorMessage = response.data;
+        } else {
+          errorMessage = JSON.stringify(response.data);
+        }
+      }
+      console.error(`Azure Speech API HTTP Error (Status ${response.status}): ${errorMessage}`);
+      res.status(response.status).json({ 
+        error: { 
+          code: response.status, 
+          message: `Azure Speech API HTTP Error: ${errorMessage}`,
+          details: response.data
+        } 
+      });
+    }
+
+  } catch (error) {
+    console.error('Azure proxy error:', error.message);
+    if (error.response) {
+      console.error('Azure proxy error response data:', error.response.data);
+      console.error('Azure proxy error response status:', error.response.status);
+    }
+    // console.error('Error stack:', error.stack); // Can be verbose
+    res.status(500).json({
+      error: {
+        code: 500,
+        message: `Azure proxy error: ${error.message}`,
+        details: error.response ? error.response.data : (error.cause || null)
+      }
+    });
+  }
+});
+
+// The line below is the original TargetContent, preserved after the new code block.
 const server = http.createServer(app);
 
 // Create WebSocket server
