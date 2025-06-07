@@ -42,6 +42,8 @@ let analyser = null;
 let microphoneStream = null;
 let currentApiVersion = 'v1';
 let isCurrentlyProcessingStream = false;
+let lastAudioBlob = null; // To store the last recorded/uploaded audio
+let lastAudioSource = ''; // To track if audio is from recording or which file input
 
 // WebSocket and streaming state
 let webSocket = null;
@@ -59,6 +61,13 @@ const googleModel = document.getElementById('google-model');
 const googleFileUpload = document.getElementById('google-file-upload');
 const googleV1Radio = document.getElementById('google-v1');
 const googleV2Radio = document.getElementById('google-v2');
+
+// Replay Buttons
+const commonReplayButton = document.getElementById('commonReplayButton');
+const commonSaveAudioButton = document.getElementById('commonSaveAudioButton');
+const googleV1ReplayButton = document.getElementById('googleV1ReplayButton');
+const azureReplayButton = document.getElementById('azureReplayButton');
+const groqReplayButton = document.getElementById('groqReplayButton');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -83,6 +92,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (savedAzureKey) azureApiKeyInput.value = savedAzureKey;
   if (savedAzureRegion) azureRegionInput.value = savedAzureRegion;
   if (savedAzureLanguage) azureLanguageInput.value = savedAzureLanguage;
+
+  // Replay functionality event listeners
+  if (commonReplayButton) commonReplayButton.addEventListener('click', replayAudio);
+if (commonSaveAudioButton) commonSaveAudioButton.addEventListener('click', saveAudioFile);
+  if (googleV1ReplayButton) googleV1ReplayButton.addEventListener('click', replayAudio);
+  if (azureReplayButton) azureReplayButton.addEventListener('click', replayAudio);
+  if (groqReplayButton) groqReplayButton.addEventListener('click', replayAudio);
+  updateReplayButtonVisibility(); // Initial state
   
   // Load saved language selections for Google V2
   const savedV2Languages = localStorage.getItem('v2SelectedLanguages');
@@ -116,7 +133,11 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Set up event listeners
   recordButton.addEventListener('click', toggleRecording);
-  uploadButton.addEventListener('click', () => {
+  // The following listener was incorrectly causing record button to trigger file upload
+  // recordButton.addEventListener('click', () => {
+    lastAudioBlob = null; // Clear previous audio before new recording
+    window.lastAudioSource = 'recording';
+    updateReplayButtonVisibility(); // Hide replay button
     // Trigger file input click based on active tab
     let fileInput;
     if (currentApiVersion === 'groq') {
@@ -126,10 +147,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } else { // Google V1/V2
       fileInput = googleFileUpload;
     }
-    if (fileInput) {
-      fileInput.click(); // This will trigger the 'change' event handled by handleFileUpload
-    }
-  });
+    // if (fileInput) {
+    //   fileInput.click(); // This will trigger the 'change' event handled by handleFileUpload
+    // }
+  // });
   googleFileUpload.addEventListener('change', handleFileUpload);
   azureFileUpload.addEventListener('change', handleFileUpload);
   debugModeCheckbox.addEventListener('change', toggleDebugMode);
@@ -168,7 +189,180 @@ document.addEventListener('DOMContentLoaded', () => {
   azureApiKeyInput.addEventListener('input', () => localStorage.setItem('azureApiKey', azureApiKeyInput.value));
   azureRegionInput.addEventListener('input', () => localStorage.setItem('azureRegion', azureRegionInput.value));
   azureLanguageInput.addEventListener('change', () => localStorage.setItem('azureLanguage', azureLanguageInput.value));
+
+  // Event listeners for tab-specific file inputs (for replay and sending)
+  const googleV1FileInput = document.getElementById('googleV1FileInput');
+  if (googleV1FileInput) {
+    googleV1FileInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      setupReplayForFile(file, 'googleV1FileInput'); // Handles lastAudioBlob and button visibility
+      if (file) {
+        // This input is specific to Google V1, so we directly prepare for V1 send
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const audioContent = arrayBufferToBase64(e.target.result);
+          sendAudioToApi(audioContent, file.type);
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  }
+
+  const azureFileInput = document.getElementById('azureFileInput'); // Specific input in Azure tab
+  if (azureFileInput) {
+    azureFileInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      setupReplayForFile(file, 'azureFileInput');
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const audioContent = arrayBufferToBase64(e.target.result);
+          sendAudioToApi(audioContent, file.type);
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  }
+
+  const groqFileInput = document.getElementById('groqFileInput'); // Specific input in Groq tab
+  if (groqFileInput) {
+    groqFileInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      setupReplayForFile(file, 'groqFileInput');
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const audioContent = arrayBufferToBase64(e.target.result);
+          sendAudioToApi(audioContent, file.type);
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  }
+
+  // Listener for the main upload button (common controls)
+  uploadButton.addEventListener('click', () => {
+    // Clear previous audio context when upload button is clicked, before file dialog opens
+    lastAudioBlob = null;
+    lastAudioSource = '';
+    updateReplayButtonVisibility();
+
+    // Trigger file input click based on active tab
+    let fileInputId;
+    const activeTab = document.querySelector('#api-tabs .nav-link.active').id;
+
+    if (activeTab === 'google-tab') {
+        fileInputId = 'google-file-upload';
+    } else if (activeTab === 'azure-tab') {
+        fileInputId = 'azure-file-upload';
+    } else if (activeTab === 'groq-tab') {
+        fileInputId = 'groq-file-upload';
+    }
+
+    if (fileInputId) {
+        document.getElementById(fileInputId).click();
+    }
+  });
+
 });
+
+// --- Replay Audio Functions ---
+function setupReplayForFile(file, sourceId) {
+  if (file) {
+    lastAudioBlob = file; // Store the File object itself, it's a Blob
+    lastAudioSource = sourceId;
+  } else {
+    lastAudioBlob = null;
+    lastAudioSource = '';
+  }
+  updateReplayButtonVisibility();
+}
+
+function updateReplayButtonVisibility() {
+  const showCommonButton = lastAudioBlob !== null;
+  if (commonReplayButton) commonReplayButton.style.display = showCommonButton ? 'inline-block' : 'none';
+  if (commonSaveAudioButton) commonSaveAudioButton.style.display = showCommonButton ? 'inline-block' : 'none';
+  
+  if (googleV1ReplayButton) googleV1ReplayButton.style.display = (lastAudioBlob && lastAudioSource === 'googleV1FileInput') ? 'inline-block' : 'none';
+  if (azureReplayButton) azureReplayButton.style.display = (lastAudioBlob && lastAudioSource === 'azureFileInput') ? 'inline-block' : 'none';
+  if (groqReplayButton) groqReplayButton.style.display = (lastAudioBlob && lastAudioSource === 'groqFileInput') ? 'inline-block' : 'none';
+}
+
+function replayAudio() {
+  if (!lastAudioBlob) {
+    console.warn('No audio available to replay.');
+    setResponseOutput('No audio available to replay.', true);
+    return;
+  }
+  try {
+    const audioUrl = URL.createObjectURL(lastAudioBlob);
+    const audio = new Audio(audioUrl);
+    audio.play();
+    setResponseOutput('Replaying audio...');
+    console.log('Replaying audio from blob/file:', lastAudioBlob);
+    audio.onended = () => {
+      URL.revokeObjectURL(audioUrl);
+      console.log('Audio replay finished, object URL revoked.');
+    };
+    audio.onerror = (e) => {
+      URL.revokeObjectURL(audioUrl);
+      console.error('Error playing audio:', e);
+      setResponseOutput('Error playing audio. Check console for details.', true);
+    };
+  } catch (error) {
+    console.error('Error creating audio object for replay:', error);
+    setResponseOutput('Error preparing audio for replay. Check console.', true);
+  }
+}
+function setResponseOutput(message, isError = false) {
+  if (statusElement) {
+    statusElement.textContent = message;
+    if (isError) {
+      statusElement.className = 'alert alert-danger mt-2';
+    } else {
+      statusElement.className = 'alert alert-info mt-2';
+    }
+  } else {
+    console.warn('statusElement not found. Message:', message);
+  }
+}
+
+// Function to save the last audio blob
+function saveAudioFile() {
+  if (!lastAudioBlob) {
+    console.warn('No audio available to save.');
+    setResponseOutput('No audio available to save.', true);
+    return;
+  }
+
+  try {
+    const audioUrl = URL.createObjectURL(lastAudioBlob);
+    const anchor = document.createElement('a');
+    anchor.href = audioUrl;
+    
+    // Determine file extension from MIME type
+    let extension = 'dat'; // Default extension
+    if (lastAudioBlob.type) {
+      const typeParts = lastAudioBlob.type.split('/');
+      if (typeParts.length > 1) {
+        extension = typeParts[1].split(';')[0]; // e.g., 'webm' from 'audio/webm;codecs=opus'
+      }
+    }
+    anchor.download = `captured_audio.${extension}`;
+    
+    document.body.appendChild(anchor); // Required for Firefox
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(audioUrl);
+    setResponseOutput('Audio file download initiated.');
+    logDebug('Audio file download initiated.', { filename: anchor.download, type: lastAudioBlob.type });
+  } catch (error) {
+    console.error('Error saving audio file:', error);
+    setResponseOutput('Error saving audio file. Check console.', true);
+  }
+}
+
+// --- End Replay Audio Functions ---
 
 // Handle service account file upload
 function handleServiceAccountUpload(event) {
@@ -602,6 +796,61 @@ function processFinalTranscript(newTranscript) {
   };
 }
 
+// Visualize audio levels
+function visualizeAudio() {
+  if (!analyser || !audioLevelFill) return;
+
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+
+  function draw() {
+    if (!analyser || !audioContext) { // Stop if analyser or context is gone
+      stopVisualization();
+      return;
+    }
+
+    animationFrameId = requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(dataArray);
+
+    let sum = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      sum += dataArray[i];
+    }
+    const average = sum / bufferLength;
+    // Scale for better visibility, ensure average is a number
+    const levelPercentage = Math.min(100, (isNaN(average) ? 0 : average / 255) * 100 * 2);
+    audioLevelFill.style.width = `${levelPercentage}%`;
+  }
+  draw();
+}
+
+function stopVisualization() {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+  if (audioLevelFill) {
+    audioLevelFill.style.width = '0%';
+  }
+  // Release audio context and related resources
+  if (analyser) {
+    analyser.disconnect();
+    analyser = null;
+  }
+  if (audioContext) {
+    // source.disconnect() was implicitly done by analyser.disconnect if source was connected to it
+    // If microphoneStream was connected to a source node that was then connected to analyser:
+    // sourceNode.disconnect(); // Assuming sourceNode is accessible here or passed
+    audioContext.close().catch(e => console.error('Error closing audio context:', e));
+    audioContext = null;
+  }
+  if (microphoneStream) {
+    microphoneStream.getTracks().forEach(track => track.stop());
+    microphoneStream = null;
+  }
+  console.log('Audio visualization stopped and resources released.');
+}
+
 // Log debug information
 function logDebug(message, data = {}) {
   if (!debugModeCheckbox.checked) return;
@@ -621,10 +870,30 @@ function logDebug(message, data = {}) {
 
 // Toggle recording
 async function toggleRecording() {
-  if (isRecording) {
+  if (isRecording) { // Means we are stopping recording
     stopRecording();
-  } else {
+  } else { // Means we are starting a new recording
+    lastAudioBlob = null; // Clear previous audio
+    lastAudioSource = 'recording'; // Set source
+    updateReplayButtonVisibility(); // Hide replay buttons initially
     await startRecording();
+  }
+}
+
+// Stop recording
+function stopRecording() {
+  if (mediaRecorder && isRecording) {
+    mediaRecorder.stop(); // This will trigger the 'onstop' event for mediaRecorder
+    stopVisualization(); // Stop visualization and release audio resources
+    isRecording = false;
+    recordButton.textContent = 'Start Recording';
+    recordButton.classList.remove('btn-danger');
+    recordButton.classList.add('btn-primary');
+    // statusElement.textContent = 'Processing audio...'; // onstop handles this
+    // statusElement.className = 'alert alert-info';
+    logDebug('Recording stopped by stopRecording function.');
+  } else {
+    logDebug('stopRecording called but no active mediaRecorder or not recording.');
   }
 }
 
@@ -738,12 +1007,18 @@ async function startRecording() {
     
     // Handle media recorder stop event
     mediaRecorder.onstop = async () => {
+      // lastAudioSource is already 'recording' from startRecording call in toggleRecording
+
+      window.lastAudioSource = 'recording'; // Tag the source
       statusElement.textContent = 'Processing audio...';
       statusElement.className = 'alert alert-info';
       
       // Create blob from audio chunks
-      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-      audioChunks = [];
+      const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType }); // Use actual mimeType
+      lastAudioBlob = audioBlob; // Store for replay
+      updateReplayButtonVisibility(); // Show relevant replay buttons
+      audioChunks = []; // Reset for next recording
+      streamingAudioChunks = []; // Reset streaming chunks
       
       // If not in streaming mode, send the complete audio to the API
       if (!isStreaming) {
@@ -752,7 +1027,7 @@ async function startRecording() {
         reader.readAsDataURL(audioBlob);
         reader.onloadend = async () => {
           const base64Audio = reader.result.split(',')[1];
-          await sendAudioToApi(base64Audio);
+          await sendAudioToApi(base64Audio, lastAudioBlob.type);
         };
       }
     };
@@ -776,64 +1051,18 @@ async function startRecording() {
   }
 }
 
-// Stop recording
-function stopRecording() {
-  if (mediaRecorder && isRecording) {
-    mediaRecorder.stop();
-    isRecording = false;
-    recordButton.textContent = 'Start Recording';
-    recordButton.classList.remove('recording');
-    statusElement.textContent = 'Processing audio...';
-    statusElement.className = 'alert alert-info';
-    
-    logDebug('Recording stopped');
-  }
-}
+// Handle file upload (for googleFileUpload, azureFileUpload, groqFileUpload)
+async function handleFileUpload(event) {
+  const file = event.target.files[0];
+  const sourceId = event.target.id; // e.g., 'googleFileUpload', 'azureFileUpload', 'groqFileUpload'
+  
+  setupReplayForFile(file, sourceId); // Handles lastAudioBlob and button visibility
 
-// Visualize audio levels
-function visualizeAudio() {
-  if (!analyser) return;
-  
-  const bufferLength = analyser.frequencyBinCount;
-  const dataArray = new Uint8Array(bufferLength);
-  
-  function draw() {
-    if (!analyser) return;
-    
-    animationFrameId = requestAnimationFrame(draw);
-    analyser.getByteFrequencyData(dataArray);
-    
-    // Calculate average level
-    let sum = 0;
-    for (let i = 0; i < bufferLength; i++) {
-      sum += dataArray[i];
-    }
-    const average = sum / bufferLength;
-    
-    // Update audio level visualization
-    const levelPercentage = Math.min(100, average * 2); // Scale for better visibility
-    audioLevelFill.style.width = `${levelPercentage}%`;
-  }
-  
-  draw();
-}
-
-// Handle file upload
-async function handleFileUpload() {
-  let fileInput;
-  if (currentApiVersion === 'groq') {
-    fileInput = groqFileUpload;
-  } else if (currentApiVersion === 'azure') {
-    fileInput = azureFileUpload;
-  } else {
-    // For Google (both V1 and V2)
-    fileInput = googleFileUpload;
-  }
-  
-  if (!fileInput.files.length) {
-    statusElement.textContent = 'Please select an audio file first';
-    statusElement.className = 'alert alert-warning';
-    return;
+  if (!file) {
+    logDebug('File selection cancelled or no file selected via main upload inputs.');
+    // statusElement.textContent = 'No file selected'; // Optional: user feedback
+    // statusElement.className = 'alert alert-warning';
+    return; // No file to process further for API submission
   }
   
   // Clear transcript before processing new file
@@ -947,7 +1176,8 @@ async function handleFileUpload() {
         model: getModel(),
         language: groqLanguage.value || 'auto-detect',
         prompt: groqPrompt.value || 'none',
-        fileName: file.name
+        content: base64Audio,
+        audioFormat: file.type
       });
     } else if (currentApiVersion === 'v1') {
       // For V1, add language code directly
@@ -1058,7 +1288,7 @@ async function handleFileUpload() {
 }
 
 // Send audio to API
-async function sendAudioToApi(base64Audio) {
+async function sendAudioToApi(base64Audio, audioFormat = 'application/octet-stream') {
   try {
     statusElement.textContent = 'Processing audio...';
     statusElement.className = 'alert alert-info';
@@ -1090,7 +1320,8 @@ async function sendAudioToApi(base64Audio) {
         apiKey: currentKey, 
         region: azureRegionInput.value,
         language: getLanguageCode(),
-        content: base64Audio
+        content: base64Audio,
+        audioFormat: audioFormat
       };
     } else if (currentApiVersion === 'groq') {
       apiUrl = '/api/groq/speech';
@@ -1102,7 +1333,8 @@ async function sendAudioToApi(base64Audio) {
         model: getModel(),
         language: getLanguageCode() || null, // Groq language is optional
         prompt: groqPrompt.value || null,   // Groq prompt is optional
-        content: base64Audio
+        content: base64Audio,
+        audioFormat: audioFormat
       };
     } else { // Google V1 or V2
       apiUrl = `/api/speech/${currentApiVersion}`;
@@ -1116,7 +1348,8 @@ async function sendAudioToApi(base64Audio) {
         apiKey: currentKey, // Also in body for consistency or if backend prefers, server.js handles it
         content: base64Audio,
         model: getModel(),
-        serviceAccount: getServiceAccountData() // Will be null if not provided
+        serviceAccount: getServiceAccountData(), // Will be null if not provided
+        audioFormat: audioFormat
       };
 
       if (currentApiVersion === 'v1') {

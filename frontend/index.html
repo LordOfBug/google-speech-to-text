@@ -132,6 +132,9 @@
                       <option value="es-ES">Spanish</option>
                       <option value="ru-RU">Russian</option>
                     </select>
+                    <label for="googleV1FileInput" class="upload-button-label">Upload File</label>
+                    <input type="file" id="googleV1FileInput" accept="audio/*" style="display:none;">
+                    <button id="googleV1ReplayButton" class="replayButton" style="display:none;">Replay Audio</button>
                   </div>
                 </div>
                 
@@ -264,6 +267,9 @@
                       <option value="ar-AE">Arabic (United Arab Emirates)</option>
                       <!-- Add more languages as needed -->
                     </select>
+                    <label for="azureFileInput" class="upload-button-label">Upload File</label>
+                    <input type="file" id="azureFileInput" accept="audio/*" style="display:none;">
+                    <button id="azureReplayButton" class="replayButton" style="display:none;">Replay Audio</button>
                   </div>
                 </div>
               </div>
@@ -290,6 +296,9 @@
                   <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo</option>
                   <option value="distil-whisper">Distil Whisper</option>
                 </select>
+                <label for="groqFileInput" class="upload-button-label">Upload File</label>
+                <input type="file" id="groqFileInput" accept="audio/*" style="display:none;">
+                <button id="groqReplayButton" class="replayButton" style="display:none;">Replay Audio</button>
               </div>
             </div>
             <div class="row mb-3">
@@ -331,6 +340,8 @@
           <div class="col-md-12 d-flex justify-content-center">
             <button id="record-button" class="btn btn-primary me-2">Start Recording</button>
             <button id="upload-button" class="btn btn-success me-2">Upload Audio</button>
+            <button id="commonReplayButton" class="btn btn-info me-2 replayButton" style="display:none;">Replay Last Audio</button>
+            <button id="commonSaveAudioButton" class="btn btn-secondary me-2 saveAudioButton" style="display:none;">Save Audio</button>
             <div class="form-check form-switch d-flex align-items-center ms-2">
               <input class="form-check-input" type="checkbox" id="streaming-mode">
               <label class="form-check-label ms-2" for="streaming-mode">Streaming Mode</label>

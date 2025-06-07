@@ -2,11 +2,11 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const { GoogleAuth } = require('google-auth-library');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const dotenv = require('dotenv');
@@ -47,7 +47,14 @@ app.use(express.json({ limit: '50mb' }));
 
 // Configure proxy agent for requests behind firewall
 const useProxy = process.env.USE_PROXY === 'true';
-const proxyUrl = process.env.PROXY_URL || 'http://127.0.0.1:8888';
+const proxyUrl = process.env.PROXY_URL || null;
+
+const AUDIO_DUMP_DIR = path.join(__dirname, 'audio_dumps');
+if (!fs.existsSync(AUDIO_DUMP_DIR)) {
+  fs.mkdirSync(AUDIO_DUMP_DIR, { recursive: true });
+  console.log(`Created audio dump directory: ${AUDIO_DUMP_DIR}`);
+}
+
 let proxyAgent = null;
 
 // Debug environment variables
@@ -68,6 +75,26 @@ app.use(express.static(path.join(__dirname, '../frontend')));
 
 // Groq API endpoint for speech recognition
 app.post('/api/groq/speech', async (req, res) => {
+  const { content, audioFormat } = req.body; // audioFormat for dumping
+
+  // Save the audio dump for Groq API
+  if (content && audioFormat) {
+    try {
+      const audioBuffer = Buffer.from(content, 'base64'); // Groq also receives base64
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      console.log(`[Groq] Received audioFormat: '${audioFormat}'`);
+      const extension = getFormatExtension(audioFormat);
+      console.log(`[Groq] Determined dump extension: '${extension}'`);
+      const filename = `groq_dump_${timestamp}.${extension}`;
+      const filePath = path.join(AUDIO_DUMP_DIR, filename);
+      fs.writeFileSync(filePath, audioBuffer);
+      console.log(`Saved Groq audio dump: ${filePath}`);
+    } catch (dumpError) {
+      console.error(`Error saving Groq audio dump: ${dumpError.message}`);
+    }
+  }
+
+  // Original try block follows
   try {
     const apiKey = req.query.key || req.body.apiKey;
     if (!apiKey) {
@@ -184,6 +211,27 @@ app.post('/api/groq/speech', async (req, res) => {
 
 // Simple proxy endpoint for Speech-to-Text API (both V1 and V2)
 app.post('/api/speech/:version', async (req, res) => {
+  const version = req.params.version || 'v1'; // Moved here to be available for dumping filename
+  const { content, audioFormat } = req.body;
+
+  // Save the audio dump for Google API
+  if (content && audioFormat) {
+    try {
+      const audioBuffer = Buffer.from(content, 'base64');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      console.log(`[Google ${version}] Received audioFormat: '${audioFormat}'`);
+      const extension = getFormatExtension(audioFormat);
+      console.log(`[Google ${version}] Determined dump extension: '${extension}'`);
+      const filename = `google_dump_${version}_${timestamp}.${extension}`;
+      const filePath = path.join(AUDIO_DUMP_DIR, filename);
+      fs.writeFileSync(filePath, audioBuffer);
+      console.log(`Saved Google (${version}) audio dump: ${filePath}`);
+    } catch (dumpError) {
+      console.error(`Error saving Google (${version}) audio dump: ${dumpError.message}`);
+    }
+  }
+
+  // Original try block follows
   try {
     const apiKey = req.query.key;
     if (!apiKey) {
@@ -705,8 +753,9 @@ app.post('/api/groq/speech/upload', upload.single('audio'), async (req, res) => 
         ...headers,
         ...form.getHeaders()
       },
+      responseType: 'stream',
       validateStatus: false,
-      timeout: 30000,
+      timeout: 60000,
       proxy: false
     };
     
@@ -778,10 +827,10 @@ app.get('/api/status', (req, res) => {
 // Azure Speech-to-Text API endpoint
 app.post('/api/azure/speech', async (req, res) => {
   try {
-    const azureKey = req.query.key || req.body.apiKey;
+    const apiKey = req.query.key || req.body.apiKey;
     const azureRegion = req.query.region || req.body.region;
     
-    if (!azureKey) {
+    if (!apiKey) {
       return res.status(400).json({ error: { code: 400, message: 'Azure API key is required' } });
     }
     if (!azureRegion) {
@@ -790,6 +839,7 @@ app.post('/api/azure/speech', async (req, res) => {
 
     const language = req.body.language || 'en-US'; // Default to en-US
     const content = req.body.content; // Base64 encoded audio
+    const audioFormat = req.body.audioFormat;
 
     if (!content) {
       return res.status(400).json({ error: { code: 400, message: 'Audio content is required' } });
@@ -798,24 +848,43 @@ app.post('/api/azure/speech', async (req, res) => {
     const apiUrl = `https://${azureRegion}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${language}&format=detailed`;
     
     // Decode base64 audio content to binary buffer
-    const audioData = Buffer.from(content, 'base64');
+    const audioBuffer = Buffer.from(content, 'base64');
+
+    // Save the audio dump
+    if (content && audioFormat) {
+      try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-'); // Sanitize timestamp for filename
+        console.log(`[Azure] Received audioFormat: '${audioFormat}'`);
+        const extension = getFormatExtension(audioFormat);
+        console.log(`[Azure] Determined dump extension: '${extension}'`);
+        const filename = `azure_dump_${timestamp}.${extension}`;
+        const filePath = path.join(AUDIO_DUMP_DIR, filename);
+        fs.writeFileSync(filePath, audioBuffer);
+        console.log(`Saved Azure audio dump: ${filePath}`);
+      } catch (dumpError) {
+        console.error(`Error saving Azure audio dump: ${dumpError.message}`);
+      }
+    }
+
+    const contentTypeForAzure = getAzureContentType(audioFormat);
+    console.log(`[Azure] Determined Content-Type for Azure request: '${contentTypeForAzure}'`);
 
     const headers = {
-      'Ocp-Apim-Subscription-Key': azureKey,
-      'Content-Type': 'audio/ogg; codecs=opus', // Assuming frontend sends webm/opus, adjust if necessary
+      'Ocp-Apim-Subscription-Key': apiKey,
+      'Content-Type': contentTypeForAzure,
       'Accept': 'application/json;text/xml'
     };
 
-    console.log(`Azure Speech API Request:`);
-    console.log(`- URL: ${apiUrl}`);
+    console.log(`Azure Speech API Request Details:`);
     console.log(`- Method: POST`);
-    console.log(`- Headers: Ocp-Apim-Subscription-Key: ${azureKey.length > 4 ? azureKey.substring(0, 4) + '...' : '...'} , Content-Type: ${headers['Content-Type']}`);
-    console.log(`- Audio data length: ${audioData.length} bytes`);
+    console.log(`- URL: ${apiUrl}`);
+    console.log(`- Request Headers Sent: ${JSON.stringify(headers, null, 2)}`);
+    console.log(`- Request Body: [${audioBuffer.length} bytes audio data]`);
 
     const axiosConfig = {
       method: 'post',
       url: apiUrl,
-      data: audioData,
+      data: audioBuffer,
       headers: headers,
       responseType: 'text', // Get raw text to inspect and parse manually
       validateStatus: false, // Handle all status codes manually
@@ -918,6 +987,59 @@ app.post('/api/azure/speech', async (req, res) => {
     }
   }
 });
+
+function getFormatExtension(mimeType) {
+  if (!mimeType) return 'dat'; // Default extension
+  const lowerMimeType = mimeType.toLowerCase();
+  if (lowerMimeType.includes('wav')) return 'wav';
+  if (lowerMimeType.includes('ogg') || (lowerMimeType.includes('webm') && lowerMimeType.includes('opus'))) return 'ogg'; // Prefer .ogg for opus
+  if (lowerMimeType.includes('webm')) return 'webm';
+  if (lowerMimeType.includes('mpeg')) return 'mp3';
+  if (lowerMimeType.includes('mp4') || lowerMimeType.includes('aac')) return 'm4a'; // .m4a is common for AAC in MP4 container
+  if (lowerMimeType.includes('flac')) return 'flac';
+  if (lowerMimeType.includes('text/plain')) return 'txt'; // For text-based things if ever needed
+  
+  // Fallback for unknown types, try to get it from after '/'
+  const parts = lowerMimeType.split('/');
+  if (parts.length > 1) {
+    return parts[1].split(';')[0]; // e.g., 'audio/custom-format' -> 'custom-format'
+  }
+  return 'dat';
+}
+
+function getAzureContentType(frontendFormat) {
+  if (!frontendFormat) {
+    console.warn('No audioFormat provided to getAzureContentType, defaulting to application/octet-stream');
+    return 'application/octet-stream';
+  }
+
+  const lowerFormat = frontendFormat.toLowerCase();
+
+  if (lowerFormat.startsWith('audio/webm') || lowerFormat.startsWith('audio/ogg')) {
+    // Azure supports OGG container for Opus. If WebM/Opus, this is the target.
+    return 'audio/ogg; codecs=opus';
+  }
+  if (lowerFormat.startsWith('audio/wav')) {
+    // For WAV, Azure can often infer samplerate etc. if not specified.
+    // A more specific example: 'audio/wav; codecs=audio/pcm; samplerate=16000'
+    return 'audio/wav'; 
+  }
+  if (lowerFormat.startsWith('audio/mpeg')) {
+    return 'audio/mpeg'; // For MP3
+  }
+  if (lowerFormat.startsWith('audio/mp4') || lowerFormat.startsWith('audio/aac')) {
+    // M4A/AAC files are typically in an MP4 container.
+    return 'audio/mp4'; 
+  }
+  if (lowerFormat.startsWith('audio/flac')) {
+    return 'audio/flac';
+  }
+  // Add other mappings as needed for formats like AMR, ALAW, MULAW.
+  // e.g., if (lowerFormat.startsWith('audio/amr')) return 'audio/amr';
+  
+  console.warn(`Unknown audio format for Azure: '${frontendFormat}', falling back to application/octet-stream`);
+  return 'application/octet-stream'; // Fallback, Azure might not support this directly unless it's a known raw stream type.
+}
 
 // The line below is the original TargetContent, preserved after the new code block.
 const server = http.createServer(app);
