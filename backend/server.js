@@ -839,14 +839,21 @@ app.post('/api/azure/speech', async (req, res) => {
     }
 
     const language = req.body.language || 'en-US'; // Default to en-US
-    const content = req.body.content; // Base64 encoded audio
-    const audioFormat = req.body.audioFormat;
+    const { content, audioFormat } = req.body; // audioFormat for dumping
+    console.log(`[Azure] Received language parameter from frontend: '${language}'`);
+    console.log(`[Azure] Using language for API URL: '${language}'`);
 
     if (!content) {
       return res.status(400).json({ error: { code: 400, message: 'Audio content is required' } });
     }
 
-    const apiUrl = `https://${azureRegion}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${language}&format=detailed`;
+    // dedicated STT endpoint
+    // const apiUrl = `https://${azureRegion}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${language}&format=detailed`;
+
+    // endpoint for custom subdomain
+    const customSubdomain = "netnc-mbk53c89-eastus2.cognitiveservices.azure.com"; // User's custom subdomain
+    const apiUrl = `https://${customSubdomain}/speech/recognition/conversation/cognitiveservices/v1?language=${language}&format=detailed`;
+    console.log(`[Azure] Constructed API URL: ${apiUrl}`);
     
     // Decode base64 audio content to binary buffer
     const audioBuffer = Buffer.from(content, 'base64');

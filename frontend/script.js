@@ -27,6 +27,7 @@ const azureApiKeyInput = document.getElementById('azure-api-key');
 const azureRegionInput = document.getElementById('azure-region');
 const azureLanguageInput = document.getElementById('azure-language');
 const azureFileUpload = document.getElementById('azure-file-upload');
+const azureSecondaryLanguageInput = document.getElementById('azure-secondary-language');
 
 // Service account data
 let serviceAccountData = null;
@@ -92,6 +93,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (savedAzureKey) azureApiKeyInput.value = savedAzureKey;
   if (savedAzureRegion) azureRegionInput.value = savedAzureRegion;
   if (savedAzureLanguage) azureLanguageInput.value = savedAzureLanguage;
+
+  const savedAzureSecondaryLanguage = localStorage.getItem('azureSecondaryLanguage');
+  if (azureSecondaryLanguageInput && savedAzureSecondaryLanguage) azureSecondaryLanguageInput.value = savedAzureSecondaryLanguage;
 
   // Replay functionality event listeners
   if (commonReplayButton) commonReplayButton.addEventListener('click', replayAudio);
@@ -189,6 +193,9 @@ if (commonSaveAudioButton) commonSaveAudioButton.addEventListener('click', saveA
   azureApiKeyInput.addEventListener('input', () => localStorage.setItem('azureApiKey', azureApiKeyInput.value));
   azureRegionInput.addEventListener('input', () => localStorage.setItem('azureRegion', azureRegionInput.value));
   azureLanguageInput.addEventListener('change', () => localStorage.setItem('azureLanguage', azureLanguageInput.value));
+  if (azureSecondaryLanguageInput) {
+    azureSecondaryLanguageInput.addEventListener('change', () => localStorage.setItem('azureSecondaryLanguage', azureSecondaryLanguageInput.value));
+  }
 
   // Event listeners for tab-specific file inputs (for replay and sending)
   const googleV1FileInput = document.getElementById('googleV1FileInput');
@@ -1502,7 +1509,13 @@ function getLanguageCode() {
   if (currentApiVersion === 'groq') {
     return groqLanguage.value || 'en';
   } else if (currentApiVersion === 'azure') {
-    return azureLanguageInput.value || 'en-US';
+    const primaryLang = azureLanguageInput.value || 'en-US';
+    // Ensure azureSecondaryLanguageInput exists before trying to access its value
+    const secondaryLang = azureSecondaryLanguageInput ? azureSecondaryLanguageInput.value : ''; 
+    if (secondaryLang && secondaryLang !== "") {
+      return `${primaryLang},${secondaryLang}`;
+    }
+    return primaryLang;
   } else if (currentApiVersion === 'v1') {
     return googleLanguage.value || 'en-US';
   } else {
