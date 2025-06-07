@@ -11,6 +11,7 @@ const { GoogleAuth } = require('google-auth-library');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const dotenv = require('dotenv');
 const { Readable } = require('stream');
+const ffmpeg = require('fluent-ffmpeg');
 const speech = require('@google-cloud/speech');
 
 // Load environment variables from .env and .env.local files
@@ -850,7 +851,12 @@ app.post('/api/azure/speech', async (req, res) => {
     // Decode base64 audio content to binary buffer
     const audioBuffer = Buffer.from(content, 'base64');
 
-    // Save the audio dump
+    // This is the original audioBuffer from frontend
+    let audioDataForAzure = audioBuffer; 
+    let finalContentTypeForAzure = getAzureContentType(audioFormat); // Initial determination
+    let filePath = null; // Will hold the path to the original audio dump
+
+    // Save the original audio dump first
     if (content && audioFormat) {
       try {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-'); // Sanitize timestamp for filename
@@ -858,7 +864,7 @@ app.post('/api/azure/speech', async (req, res) => {
         const extension = getFormatExtension(audioFormat);
         console.log(`[Azure] Determined dump extension: '${extension}'`);
         const filename = `azure_dump_${timestamp}.${extension}`;
-        const filePath = path.join(AUDIO_DUMP_DIR, filename);
+        filePath = path.join(AUDIO_DUMP_DIR, filename); // Assign to the outer scope filePath
         fs.writeFileSync(filePath, audioBuffer);
         console.log(`Saved Azure audio dump: ${filePath}`);
       } catch (dumpError) {
@@ -867,11 +873,75 @@ app.post('/api/azure/speech', async (req, res) => {
     }
 
     const contentTypeForAzure = getAzureContentType(audioFormat);
-    console.log(`[Azure] Determined Content-Type for Azure request: '${contentTypeForAzure}'`);
+    // Attempt FFMPEG conversion to OGG/Opus if not already OGG
+    // Determine if conversion is needed. 
+    // Azure prefers 'audio/ogg; codecs=opus'. WAV is generally fine as is.
+    // So, convert if it's not WAV and not already 'audio/ogg; codecs=opus'.
+    const lowerAudioFormat = audioFormat ? audioFormat.toLowerCase() : '';
+    const needsConversion = 
+      !lowerAudioFormat.startsWith('audio/wav') && 
+      lowerAudioFormat !== 'audio/ogg; codecs=opus';
+
+    // filePath variable (path to the original dump) should be in scope from the original dump saving block
+    // Ensure 'filePath' from the original dump is accessible here or re-derive it if necessary.
+    // For this change, we assume 'filePath' (e.g., /path/to/audio_dumps/azure_dump_timestamp.webm) is available.
+
+    if (audioFormat && needsConversion && filePath && fs.existsSync(filePath)) { // Added filePath check
+      const tempId = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+      // Output of ffmpeg will be temporary, then potentially saved permanently
+      const tempOutputFilename = `azure_ffmpeg_out_${tempId}.ogg`;
+      const tempOutputPath = path.join(AUDIO_DUMP_DIR, tempOutputFilename);
+
+      console.log(`[Azure FFMPEG] Attempting conversion for format: ${audioFormat}. Input: ${filePath}, Output: ${tempOutputPath}`);
+
+      try {
+        // No need to write a new tempInputFile, ffmpeg will use 'filePath' (original dump)
+        await new Promise((resolve, reject) => {
+          ffmpeg(filePath) // Use the original dump file path as input
+            .audioCodec('libopus')
+            .toFormat('ogg')
+            .on('error', (err) => {
+              console.error(`[Azure FFMPEG] Error during conversion: ${err.message}`);
+              reject(err);
+            })
+            .on('end', () => {
+              console.log(`[Azure FFMPEG] Conversion to OGG/Opus finished successfully.`);
+              resolve();
+            })
+            .save(tempOutputPath);
+        });
+
+        audioDataForAzure = fs.readFileSync(tempOutputPath); // Read the converted OGG file
+        finalContentTypeForAzure = 'audio/ogg; codecs=opus'; // Set Content-Type for converted OGG/Opus
+        console.log(`[Azure FFMPEG] Successfully converted to OGG/Opus. New buffer size: ${audioDataForAzure.length}`);
+
+        // Save the converted file permanently for debugging
+        const permanentConvertedFilename = `azure_converted_${tempId}.ogg`;
+        const permanentConvertedPath = path.join(AUDIO_DUMP_DIR, permanentConvertedFilename);
+        fs.writeFileSync(permanentConvertedPath, audioDataForAzure);
+        console.log(`[Azure FFMPEG] Saved converted audio to: ${permanentConvertedPath}`);
+
+      } catch (conversionError) {
+        console.error(`[Azure FFMPEG] Conversion failed: ${conversionError.message}. Sending original audio.`);
+        // Fallback: audioDataForAzure and finalContentTypeForAzure remain as initially set
+      } finally {
+        // The tempOutputPath is the direct output of ffmpeg.
+        // Whether conversion succeeded (and its content was copied to a permanent file) or failed,
+        // this temporary output file should always be cleaned up if it exists.
+        if (fs.existsSync(tempOutputPath)) {
+          fs.unlinkSync(tempOutputPath);
+          console.log(`[Azure FFMPEG] Cleaned up temporary output file: ${tempOutputFilename}`);
+        }
+      }
+    } else {
+      console.log(`[Azure] Skipping FFMPEG conversion for format: ${audioFormat}. Using original/determined Content-Type.`);
+    }
+
+    console.log(`[Azure] Final Content-Type for Azure request: '${finalContentTypeForAzure}'`);
 
     const headers = {
       'Ocp-Apim-Subscription-Key': apiKey,
-      'Content-Type': contentTypeForAzure,
+      'Content-Type': finalContentTypeForAzure,
       'Accept': 'application/json;text/xml'
     };
 
@@ -884,7 +954,7 @@ app.post('/api/azure/speech', async (req, res) => {
     const axiosConfig = {
       method: 'post',
       url: apiUrl,
-      data: audioBuffer,
+      data: audioDataForAzure,
       headers: headers,
       responseType: 'text', // Get raw text to inspect and parse manually
       validateStatus: false, // Handle all status codes manually
@@ -989,12 +1059,25 @@ app.post('/api/azure/speech', async (req, res) => {
 });
 
 function getFormatExtension(mimeType) {
+  console.log(`[getFormatExtension] Received mimeType: ${mimeType}`);
+
   if (!mimeType) return 'dat'; // Default extension
   const lowerMimeType = mimeType.toLowerCase();
-  if (lowerMimeType.includes('wav')) return 'wav';
-  if (lowerMimeType.includes('ogg') || (lowerMimeType.includes('webm') && lowerMimeType.includes('opus'))) return 'ogg'; // Prefer .ogg for opus
-  if (lowerMimeType.includes('webm')) return 'webm';
-  if (lowerMimeType.includes('mpeg')) return 'mp3';
+
+  // Prioritize container format extension first
+  if (lowerMimeType.startsWith('audio/webm')) {
+    return 'webm'; // WebM container, save as .webm
+  }
+  if (lowerMimeType.startsWith('audio/ogg')) {
+    return 'ogg';   // OGG container, save as .ogg
+  }
+  // Specific known types after container checks
+  if (lowerMimeType.startsWith('audio/wav') || lowerMimeType.startsWith('audio/x-wav')) {
+    return 'wav';
+  }
+  if (lowerMimeType.includes('mpeg')) {
+    return 'mp3';
+  }
   if (lowerMimeType.includes('mp4') || lowerMimeType.includes('aac')) return 'm4a'; // .m4a is common for AAC in MP4 container
   if (lowerMimeType.includes('flac')) return 'flac';
   if (lowerMimeType.includes('text/plain')) return 'txt'; // For text-based things if ever needed
@@ -1008,6 +1091,8 @@ function getFormatExtension(mimeType) {
 }
 
 function getAzureContentType(frontendFormat) {
+  console.log(`[getAzureContentType] Received frontendFormat: ${frontendFormat}`);
+  
   if (!frontendFormat) {
     console.warn('No audioFormat provided to getAzureContentType, defaulting to application/octet-stream');
     return 'application/octet-stream';
